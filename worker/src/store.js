@@ -393,6 +393,7 @@ export class StudoStore extends DurableObject {
       uni: { id: uniId, name: this.uni.name, auto: this.uni.auth === "jku", ical_hint: this.uni.icalHint },
       name: this.getSetting("display_name") || this.getSetting("kusss_name"),
       name_source: this.getSetting("display_name") ? "manual" : this.getSetting("kusss_name") ? "uni" : null,
+      avatar: this.getSetting("avatar"),
       matrikel: this.getSetting("matrikel") || matrikel(uniId, this.getSetting("username")),
       verified: this.getSetting("verified") === "1",
       demo: this.env.DEMO === "1",
@@ -520,6 +521,14 @@ export class StudoStore extends DurableObject {
       const body = await request.json().catch(() => ({}));
       if (typeof body.name === "string") this.setSetting("display_name", body.name.trim().slice(0, 80) || null);
       if (typeof body.matrikel === "string") this.setSetting("matrikel", body.matrikel.trim().slice(0, 20) || null);
+      if (body.avatar === null) this.setSetting("avatar", null);
+      else if (typeof body.avatar === "string") {
+        // Profilbild: im Browser auf 256 px verkleinertes JPEG als data:-URL
+        if (!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(body.avatar) || body.avatar.length > 200_000) {
+          return error(422, "Bild zu groß oder kein gültiges Bild.");
+        }
+        this.setSetting("avatar", body.avatar);
+      }
       return json(this.me(url.origin));
     }
 

@@ -137,8 +137,9 @@ function initials(name) {
   if (!parts.length) return "";
   return (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase();
 }
-function setAvatar(node, name) {
-  const ini = initials(name);
+function setAvatar(node, me = state.me) {
+  if (me?.avatar) { const img = el("img"); img.src = me.avatar; img.alt = ""; node.replaceChildren(img); return; }
+  const ini = initials(me?.name);
   if (ini) node.textContent = ini;
   else node.replaceChildren(svg('<circle cx="12" cy="8.5" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7z"/>'));
 }
@@ -967,7 +968,7 @@ function displayName(me) { return me.name || (me.uni.id === "jku" ? me.matrikel 
 
 function renderSettings() {
   const me = state.me;
-  setAvatar($("#set-avatar"), me.name);
+  setAvatar($("#set-avatar"));
   $("#set-name").textContent = displayName(me) + (me.demo ? " (Demo)" : "");
   $("#set-sub").textContent = [me.name ? me.matrikel : null, me.uni.name].filter(Boolean).join(" · ");
   $("#set-status").textContent = me.connected ? (me.ical_source === "auto" ? "Automatisch" : "Verbunden") : "Nicht verbunden";
@@ -1059,21 +1060,65 @@ function openAbo() {
 }
 
 // ---------- Persönliche Daten + Studienrichtungen ----------
-const JKU_PROGRAMS = {
-  Bachelor: ["Artificial Intelligence", "Biologische Chemie", "Chemie", "Elektronik und Informationstechnik", "Humanmedizin", "Informatik",
-    "Kulturwissenschaften", "Kunststofftechnik", "Mechatronik", "Medizintechnik", "Sozialwirtschaft", "Soziologie",
-    "Statistik und Data Science", "Technische Mathematik", "Technische Physik", "Wirtschaftsinformatik", "Wirtschaftswissenschaften"],
-  Master: ["Artificial Intelligence", "Computer Science", "Mechatronik", "Wirtschaftsinformatik"],
-  Diplom: ["Rechtswissenschaften", "Wirtschaftsrecht"],
+// Studienangebot der JKU als Baum: Studienart › Fakultät › Studium. Kennzahlen nur, wo sie sicher bekannt sind;
+// alle anderen kommen beim Laden der Noten automatisch aus KUSSS.
+const TNF = "Technisch-Naturwissenschaftliche Fakultät", SOWI = "Sozial- und Wirtschaftswissenschaftliche Fakultät";
+const JKU_TREE = {
+  Bachelor: {
+    [TNF]: [["Artificial Intelligence"], ["Biologische Chemie"], ["Chemie"], ["Elektronik und Informationstechnik"], ["Informatik", "UK 033 521"],
+      ["Kunststofftechnik"], ["Mechatronik"], ["Medizintechnik"], ["Technische Mathematik"], ["Technische Physik"]],
+    [SOWI]: [["Kulturwissenschaften"], ["Sozialwirtschaft"], ["Soziologie"], ["Statistik und Data Science"],
+      ["Wirtschaftsinformatik", "UK 033 526"], ["Wirtschaftswissenschaften"]],
+    "Medizinische Fakultät": [["Humanmedizin"]],
+  },
+  Master: {
+    [TNF]: [["Artificial Intelligence"], ["Computer Science"], ["Mechatronik"]],
+    [SOWI]: [["Wirtschaftsinformatik"]],
+  },
+  Diplom: { "Rechtswissenschaftliche Fakultät": [["Rechtswissenschaften"]] },
 };
 const ECTS_BY_TYPE = { Bachelor: 180, Master: 120, Diplom: 240 };
+
+// Profilbild: quadratisch zuschneiden, auf 256 px verkleinern, als JPEG speichern
+function pickAvatar(onDone) {
+  const input = el("input"); input.type = "file"; input.accept = "image/*";
+  input.addEventListener("change", () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = async () => {
+        const size = 256, c = document.createElement("canvas");
+        c.width = c.height = size;
+        const side = Math.min(img.width, img.height);
+        c.getContext("2d").drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, size, size);
+        try { state.me = { ...state.me, ...(await put("/api/profile", { avatar: c.toDataURL("image/jpeg", .85) })) }; onDone(); haptic(); }
+        catch (err) { alert(err.message); }
+      };
+      img.onerror = () => alert("Das Bild konnte nicht gelesen werden.");
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+  input.click();
+}
 
 function openProfile() {
   pushPage("Persönliche Daten", (body, entry) => {
     const me = state.me;
     const head = el("div", "page-head profile-head");
-    const av = el("span", "avatar avatar-lg"); setAvatar(av, me.name);
-    head.append(av);
+    const av = el("button", "avatar avatar-lg"); setAvatar(av);
+    av.setAttribute("aria-label", "Profilbild ändern");
+    const edit = el("button", "text-btn", me.avatar ? "Foto ändern" : "Foto hinzufügen");
+    const refreshAvatar = () => { setAvatar(av); setAvatar($("#avatar")); edit.textContent = state.me.avatar ? "Foto ändern" : "Foto hinzufügen"; remove.hidden = !state.me.avatar; };
+    const remove = el("button", "text-btn muted-btn", "Entfernen");
+    remove.hidden = !me.avatar;
+    remove.addEventListener("click", async () => { state.me = { ...state.me, ...(await put("/api/profile", { avatar: null })) }; refreshAvatar(); });
+    av.addEventListener("click", () => pickAvatar(refreshAvatar));
+    edit.addEventListener("click", () => pickAvatar(refreshAvatar));
+    const actions = el("div", "avatar-actions"); actions.append(edit, remove);
+    head.append(av, actions);
     body.append(head);
 
     const fromUni = me.name_source === "uni";
@@ -1083,7 +1128,7 @@ function openProfile() {
       nameRow = el("label", "row");
       const input = el("input"); input.value = me.name || ""; input.placeholder = "Vor- und Nachname"; input.autocomplete = "name";
       input.addEventListener("change", async () => {
-        try { state.me = { ...state.me, ...(await put("/api/profile", { name: input.value })) }; setAvatar(av, state.me.name); haptic(); }
+        try { state.me = { ...state.me, ...(await put("/api/profile", { name: input.value })) }; refreshAvatar(); haptic(); }
         catch (err) { alert(err.message); }
       });
       nameRow.append(el("span", "row-label", "Name"), input);
@@ -1112,26 +1157,65 @@ function openProfile() {
   });
 }
 
+// Studienrichtung wählen: Studienart › Fakultät › Studium, Kennzahl und ECTS-Ziel füllen sich selbst
 function openProgramAdd() {
   const isJku = state.me.uni.id === "jku";
-  const options = [["", "Bitte wählen"]];
-  if (isJku) for (const [type, names] of Object.entries(JKU_PROGRAMS)) for (const n of names) options.push([`${type}|${n}`, `${type} ${n}`]);
-  options.push(["other", "Anderes Studium …"]);
-  formPage("Studienrichtung", [
-    { name: "pick", label: "Studium", options, required: true, onChange: (sel, form) => {
-      const other = sel.value === "other";
-      form.elements.name.closest("label").hidden = !other;
-      form.elements.name.required = other;
-      const type = sel.value.split("|")[0];
-      if (ECTS_BY_TYPE[type]) form.elements.ects_target.value = ECTS_BY_TYPE[type];
-    } },
-    { name: "name", label: "Name", placeholder: "z. B. Bachelor Statistik", hidden: true },
-    { name: "ects_target", label: "ECTS-Ziel", value: 180, inputmode: "numeric" },
-    { name: "code", label: "Kennzahl", placeholder: "optional" },
-  ], "Hinzufügen", async (v) => {
-    const name = v.pick === "other" ? v.name : v.pick.replace("|", " ");
-    if (!name) throw new Error("Bitte ein Studium wählen.");
-    state.gradesData = await post("/api/programs", { name, code: v.code || null, ects_target: +v.ects_target || null });
+  pushPage("Studienrichtung", (body) => {
+    const head = el("div", "page-head"); head.append(el("h1", "", "Studienrichtung")); body.append(head);
+    const mkSelect = (label) => {
+      const r = el("label", "row"); const s = el("select");
+      r.append(el("span", "row-label", label), s);
+      return [r, s];
+    };
+    const [typeRow, typeSel] = mkSelect("Studienart");
+    const [facRow, facSel] = mkSelect("Fakultät");
+    const [progRow, progSel] = mkSelect("Studium");
+    const nameRow = el("label", "row"); const nameIn = el("input"); nameIn.placeholder = "z. B. Bachelor Statistik";
+    nameRow.append(el("span", "row-label", "Name"), nameIn);
+    const ectsRow = el("label", "row"); const ectsIn = el("input"); ectsIn.inputMode = "numeric"; ectsIn.placeholder = "180";
+    ectsRow.append(el("span", "row-label", "ECTS-Ziel"), ectsIn);
+    const codeRow = el("label", "row"); const codeIn = el("input"); codeIn.placeholder = "kommt aus KUSSS";
+    codeRow.append(el("span", "row-label", "Kennzahl"), codeIn);
+
+    const fillSel = (sel, items) => { sel.replaceChildren(...items.map(([v, t]) => new Option(t, v))); };
+    const types = isJku ? Object.keys(JKU_TREE) : [];
+    fillSel(typeSel, [["", "Bitte wählen"], ...types.map((t) => [t, t]), ["other", "Anderes Studium …"]]);
+    const update = (level) => {
+      const type = typeSel.value, other = type === "other" || !type;
+      if (level <= 1) {
+        const facs = JKU_TREE[type] ? Object.keys(JKU_TREE[type]) : [];
+        fillSel(facSel, facs.map((f) => [f, f]));
+        if (ECTS_BY_TYPE[type]) ectsIn.value = ECTS_BY_TYPE[type];
+      }
+      if (level <= 2) {
+        const progs = JKU_TREE[type]?.[facSel.value] || [];
+        fillSel(progSel, progs.map(([n]) => [n, n]));
+      }
+      const prog = (JKU_TREE[type]?.[facSel.value] || []).find(([n]) => n === progSel.value);
+      codeIn.value = prog?.[1] || "";
+      facRow.hidden = progRow.hidden = other;
+      nameRow.hidden = type !== "other";
+    };
+    typeSel.addEventListener("change", () => update(1));
+    facSel.addEventListener("change", () => update(2));
+    progSel.addEventListener("change", () => update(3));
+    update(1);
+
+    const btn = el("button", "btn-primary", "Hinzufügen");
+    const err = el("p", "error");
+    btn.addEventListener("click", async () => {
+      err.textContent = "";
+      const type = typeSel.value;
+      const name = type === "other" ? nameIn.value.trim() : type && progSel.value ? `${type} ${progSel.value}` : "";
+      if (!name) { err.textContent = "Bitte ein Studium wählen."; return; }
+      try {
+        state.gradesData = await post("/api/programs", { name, code: codeIn.value || null, ects_target: +ectsIn.value || null });
+        history.back();
+      } catch (x) { err.textContent = x.message; }
+    });
+    body.append(group(typeRow, facRow, progRow, nameRow, ectsRow, codeRow),
+      note(isJku ? "Kennzahl und ECTS-Ziel werden ausgefüllt, sobald du ein Studium wählst. Fehlt die Kennzahl, kommt sie mit den Noten aus KUSSS." : "ECTS-Ziel: Bachelor meist 180, Master 120."),
+      btn, err);
   });
 }
 
@@ -1159,7 +1243,7 @@ function openProgram(p) {
 // ---------- Start ----------
 async function loadMe() {
   state.me = await api("/api/me");
-  setAvatar($("#avatar"), state.me.name);
+  setAvatar($("#avatar"));
 }
 
 async function boot() {
