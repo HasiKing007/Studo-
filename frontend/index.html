@@ -1,112 +1,190 @@
 <!doctype html>
-<html lang="de">
+<html lang="de" class="splashing">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Studo+</title>
   <meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
-  <!-- iOS: als App vom Home-Bildschirm starten -->
+  <!-- iOS: als App vom Home-Bildschirm starten, mit eigenem Icon -->
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Studo+">
-  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-  <link rel="icon" type="image/png" href="/icons/favicon-32.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
   <link rel="manifest" href="/manifest.json">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+  <!-- Start-Animation: Logo erscheint, danach gleitet der Vorhang nach oben weg -->
+  <div class="splash" id="splash" aria-hidden="true">
+    <div class="splash-inner">
+      <img class="splash-mark" src="/icons/icon-512.png" alt="" width="120" height="120">
+      <div class="splash-word">Dein Studium. Organisiert.</div>
+    </div>
+  </div>
+
   <!-- Login -->
-  <section id="login" class="screen" hidden>
+  <section id="login" class="screen reveal" hidden>
     <div class="login-box">
-      <h1 class="brand brand-lg">Studo<sup>+</sup></h1>
-      <p class="muted">Melde dich mit deiner JKU-Kennung an.</p>
-      <form id="login-form" class="group" autocomplete="on">
-        <label class="row"><span>Benutzer</span>
-          <input name="username" autocomplete="username" autocapitalize="none" placeholder="k12345678" required></label>
-        <label class="row"><span>Passwort</span>
-          <input name="password" type="password" autocomplete="current-password" required></label>
+      <img class="login-logo" src="/icons/icon-512.png" alt="Studo+" width="96" height="96">
+      <h1 class="login-title">Studo<span class="plus">+</span></h1>
+      <p class="muted login-sub">Melde dich mit deinem Uni-Account an.</p>
+      <form id="login-form" autocomplete="on">
+        <div class="group">
+          <label class="row"><span>Hochschule</span>
+            <select name="uni" id="login-uni"><option value="jku">JKU Linz</option></select></label>
+          <label class="row"><span id="login-user-label">k-Nummer</span>
+            <input name="username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="k12345678" required></label>
+          <label class="row"><span>Passwort</span>
+            <input name="password" type="password" autocomplete="current-password" placeholder="Passwort" required></label>
+        </div>
+        <p class="footnote" id="login-hint"></p>
+        <button class="btn-primary" type="submit"><span class="spinner" hidden></span><span class="label">Anmelden</span></button>
       </form>
-      <p class="hint">Beim allerersten Login legst du hier dein Studo+-Passwort fest.
-        Dein JKU-Passwort wird nicht gebraucht: Der Stundenplan kommt über den KUSSS-Kalenderlink.</p>
-      <button form="login-form" class="btn-primary" type="submit">Anmelden</button>
       <p id="login-error" class="error" role="alert"></p>
     </div>
   </section>
 
   <!-- App -->
-  <div id="app" hidden>
+  <div id="app" class="reveal" hidden>
     <header class="appbar">
-      <h1 class="brand">Studo<sup>+</sup></h1>
-      <div class="appbar-meta"><span id="me-name"></span><span id="me-status">JKU Linz</span></div>
+      <div class="appbar-brand"><img class="logo" src="/icons/icon-192.png" alt="" width="40" height="40"><span>Studo<span class="plus">+</span></span></div>
+      <button class="avatar" id="avatar" aria-label="Einstellungen"></button>
     </header>
 
     <main>
       <section id="tab-today" class="tab">
-        <h2 class="section-title">Stundenplan</h2>
+        <div class="large-title"><h1>Heute</h1><p class="subtitle" id="today-date"></p></div>
+        <div id="notice" class="notice" hidden></div>
         <div id="today-list" class="list"></div>
-        <h2 class="section-title">Schnellzugriffe</h2>
+        <h2 class="section-header">Schnellzugriffe</h2>
         <div id="quick-links" class="links"></div>
       </section>
 
       <section id="tab-calendar" class="tab" hidden>
-        <a id="subscribe" class="banner" href="#">In Apple Kalender abonnieren</a>
+        <div class="large-title"><h1>Kalender</h1><p class="subtitle" id="week-label"></p></div>
+        <a id="subscribe" class="banner" href="#">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="3"/><path d="M4 10h16M8.5 3v4M15.5 3v4M12 13v4M10 15h4"/></svg>
+          <span>In Apple Kalender abonnieren</span></a>
         <div class="week-nav">
-          <button id="week-prev" class="icon-btn" aria-label="Vorige Woche">‹</button>
-          <span id="week-label"></span>
-          <button id="week-next" class="icon-btn" aria-label="Nächste Woche">›</button>
+          <button id="week-prev" class="icon-btn" aria-label="Vorige Woche"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+          <div id="week-strip" class="week-strip"></div>
+          <button id="week-next" class="icon-btn" aria-label="Nächste Woche"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
         </div>
-        <div id="week-strip" class="week-strip"></div>
         <div id="calendar-list" class="list"></div>
+
+        <h2 class="section-header">Kurse · Anwesenheitspflicht</h2>
+        <div id="course-list" class="group"></div>
+        <p class="footnote">Gilt für alle Termine des Kurses. Einzelne Termine änderst du durch Antippen der Terminkarte.</p>
       </section>
 
       <section id="tab-settings" class="tab" hidden>
-        <h2 class="section-title">Account</h2>
+        <div class="large-title"><h1>Einstellungen</h1></div>
+
         <div class="group">
-          <div class="row"><span>JKU-Account</span><span id="set-user" class="muted"></span></div>
-          <div class="row"><span>Letzte Synchronisierung</span><span id="set-sync" class="muted"></span></div>
+          <div class="row profile">
+            <div class="avatar avatar-lg" id="set-avatar"></div>
+            <div class="profile-text"><strong id="set-user"></strong><span class="muted" id="set-uni"></span></div>
+          </div>
+        </div>
+
+        <h2 class="section-header">Stundenplan</h2>
+        <div class="group">
+          <div class="row"><span>Status</span><span id="set-status" class="muted"></span></div>
+          <div class="row"><span>Zuletzt aktualisiert</span><span id="set-sync" class="muted"></span></div>
           <button id="btn-sync" class="row row-btn">Jetzt synchronisieren</button>
-          <button id="btn-logout" class="row row-btn">Abmelden</button>
-          <button id="btn-disconnect" class="row row-btn danger">Verbindung trennen</button>
         </div>
         <p id="sync-error" class="error"></p>
 
-        <h2 class="section-title">KUSSS-Kalender</h2>
+        <div id="jku-connect" hidden>
+          <h2 class="section-header">KUSSS automatisch verbinden</h2>
+          <form id="jku-form" class="group">
+            <label class="row"><span>JKU-Passwort</span>
+              <input name="password" type="password" autocomplete="current-password" placeholder="Passwort" required></label>
+            <button class="row row-btn" type="submit">Kalender-Link von KUSSS holen</button>
+          </form>
+          <p class="footnote">Studo+ meldet sich einmal bei KUSSS an und übernimmt deinen Kalender-Abo-Link. Das Passwort wird dafür nur kurz verwendet und nicht gespeichert.</p>
+        </div>
+
+        <h2 class="section-header">Kalender-Link (iCal)</h2>
         <form id="ical-form" class="group">
-          <label class="row row-stack"><span>Privater iCal-Link aus KUSSS</span>
-            <input name="ical_url" type="url" placeholder="https://www.kusss.jku.at/…" autocomplete="off"></label>
+          <label class="row row-stack"><span>Privater iCal-Link deiner Uni</span>
+            <input name="ical_url" type="url" placeholder="https://…" autocomplete="off"></label>
           <button class="row row-btn" type="submit">Link speichern</button>
         </form>
-        <p class="hint">KUSSS → Mein Kalender → Kalender exportieren. Der Link wird verschlüsselt gespeichert.</p>
+        <p class="footnote" id="ical-hint"></p>
 
-        <h2 class="section-title">Apple Kalender</h2>
+        <h2 class="section-header">Anwesenheitspflicht im Apple Kalender</h2>
         <div class="group" id="marker-group">
-          <label class="row"><span>„!“ vor dem Kursnamen</span><input type="radio" name="marker" value="prefix"></label>
-          <label class="row"><span>🔴 vor dem Kursnamen</span><input type="radio" name="marker" value="emoji"></label>
-          <label class="row"><span>Nur in den Notizen</span><input type="radio" name="marker" value="notes"></label>
+          <label class="row check-row"><span>„!“ vor dem Kursnamen</span><input type="radio" name="marker" value="prefix"><span class="check" aria-hidden="true"></span></label>
+          <label class="row check-row"><span>🔴 vor dem Kursnamen</span><input type="radio" name="marker" value="emoji"><span class="check" aria-hidden="true"></span></label>
+          <label class="row check-row"><span>Nur in den Notizen</span><input type="radio" name="marker" value="notes"><span class="check" aria-hidden="true"></span></label>
         </div>
+
+        <h2 class="section-header">Kalender-Abo</h2>
         <div class="group">
           <button id="btn-copy-feed" class="row row-btn">Abo-Link kopieren</button>
-          <button id="btn-rotate-feed" class="row row-btn danger">Abo-Link erneuern</button>
+          <button id="btn-rotate-feed" class="row row-btn">Abo-Link erneuern</button>
         </div>
-        <p class="hint">Erneuern macht den alten Link ungültig. Danach in Apple Kalender neu abonnieren.</p>
+        <p class="footnote">Erneuern macht den alten Link ungültig. Danach in Apple Kalender neu abonnieren.</p>
+
+        <div id="admin-entry" hidden>
+          <h2 class="section-header">Admin</h2>
+          <div class="group">
+            <button id="btn-admin" class="row row-nav"><span>Nutzungsübersicht</span><svg class="chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+          </div>
+        </div>
+
+        <div class="group group-spaced">
+          <button id="btn-logout" class="row row-btn">Abmelden</button>
+          <button id="btn-delete" class="row row-btn danger">Konto und Daten löschen</button>
+        </div>
+        <p class="footnote center">Studo+ ist ein privates Projekt und nicht offiziell mit einer Hochschule verbunden.</p>
+      </section>
+
+      <section id="tab-admin" class="tab" hidden>
+        <button class="back" id="admin-back"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>Einstellungen</button>
+        <div class="large-title"><h1>Nutzung</h1><p class="subtitle" id="admin-updated"></p></div>
+        <div class="stats" id="admin-stats"></div>
+        <h2 class="section-header">Letzte 14 Tage</h2>
+        <div class="group chart-box">
+          <div class="chart" id="admin-chart"></div>
+          <div class="legend"><span class="dot dot-a"></span>App geöffnet <span class="dot dot-b"></span>Kalender-Abrufe</div>
+        </div>
+        <h2 class="section-header">Hochschulen</h2>
+        <div class="group" id="admin-unis"></div>
+        <h2 class="section-header">Konten</h2>
+        <div class="group" id="admin-users"></div>
       </section>
     </main>
 
     <nav class="tabbar">
-      <button data-tab="today" class="active"><svg viewBox="0 0 24 24"><path d="M4 11.5 12 5l8 6.5V20h-5v-5H9v5H4z"/></svg>Heute</button>
-      <button data-tab="calendar"><svg viewBox="0 0 24 24"><rect x="4" y="5.5" width="16" height="14.5" rx="2.5"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4"/></svg>Kalender</button>
-      <button data-tab="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>Einstellungen</button>
+      <button data-tab="today" class="active" aria-label="Heute">
+        <svg class="i-off" viewBox="0 0 24 24"><path d="M4 10.8 12 4l8 6.8V19a1.5 1.5 0 0 1-1.5 1.5H15v-5.5H9v5.5H5.5A1.5 1.5 0 0 1 4 19z"/></svg>
+        <svg class="i-on" viewBox="0 0 24 24"><path class="fill" d="M4 10.8 12 4l8 6.8V19a1.5 1.5 0 0 1-1.5 1.5H15v-5.5H9v5.5H5.5A1.5 1.5 0 0 1 4 19z"/></svg>
+        Heute</button>
+      <button data-tab="calendar" aria-label="Kalender">
+        <svg class="i-off" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15.5" rx="3"/><path d="M4 10h16M8.5 3v4M15.5 3v4"/></svg>
+        <svg class="i-on" viewBox="0 0 24 24"><path class="fill" fill-rule="evenodd" d="M7 5h10a3 3 0 0 1 3 3v9.5a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zM5.8 10.2v7.3c0 .7.5 1.2 1.2 1.2h10c.7 0 1.2-.5 1.2-1.2v-7.3z"/><path d="M8.5 3v4M15.5 3v4"/></svg>
+        Kalender</button>
+      <button data-tab="settings" aria-label="Einstellungen">
+        <svg class="i-off" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <svg class="i-on" viewBox="0 0 24 24"><path class="fill" fill-rule="evenodd" d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1zM12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z"/></svg>
+        Einstellungen</button>
     </nav>
   </div>
 
   <template id="event-tpl">
     <article class="card">
       <div class="card-main">
-        <div class="card-time"></div>
-        <div class="card-title"></div>
-        <div class="card-loc"></div>
+        <div class="card-bar"></div>
+        <div class="card-body">
+          <div class="card-time"></div>
+          <div class="card-title"></div>
+          <div class="card-loc"></div>
+        </div>
       </div>
       <label class="card-toggle"><span>Anwesenheitspflicht</span>
         <input type="checkbox" class="switch" switch></label>

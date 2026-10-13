@@ -7,6 +7,10 @@ test("Raum-Parser", () => {
   assert.deepEqual(parseRoom("HS 1"), ["Hörsaaltrakt", "HS 1"]);
   assert.deepEqual(parseRoom("K 224B"), ["Keplergebäude", "K 224B"]);
   assert.deepEqual(parseRoom("S3 055"), ["Science Park 3", "S3 055"]);
+  assert.deepEqual(parseRoom("S2 Z74"), ["Science Park 2", "S2 Z74"]);
+  assert.deepEqual(parseRoom("K 269D"), ["Keplergebäude", "K 269D"]);
+  assert.deepEqual(parseRoom("t 911"), ["TNF-Turm", "T 911"]);
+  assert.deepEqual(parseRoom("ESH 1"), [null, "ESH 1"]);
   assert.equal(parseRoom("Online (Zoom)")[0], "Online");
   assert.deepEqual(parseRoom("XYZ irgendwo"), [null, "XYZ irgendwo"]);
   assert.deepEqual(parseRoom(null), [null, null]);
