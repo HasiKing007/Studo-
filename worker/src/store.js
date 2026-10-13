@@ -72,7 +72,10 @@ export class StudoStore extends DurableObject {
     super(ctx, env);
     this.sql = ctx.storage.sql;
     this.failures = [];
-    ctx.blockConcurrencyWhile(async () => this.sql.exec(SCHEMA));
+    ctx.blockConcurrencyWhile(async () => {
+      this.sql.exec(SCHEMA);
+      try { this.sql.exec("ALTER TABLE courses ADD COLUMN lecturer TEXT"); } catch { /* Spalte gibt es schon */ }
+    });
   }
 
   getSetting(key, fallback = null) {
@@ -191,7 +194,7 @@ export class StudoStore extends DurableObject {
     const byCourse = new Map();
     for (const e of events) {
       if (e.cancelled) continue;
-      const c = byCourse.get(e.courseId) || { title: e.title, nr: /^\d{3}\.\w{3}$/.test(e.courseId) ? e.courseId : null, kinds: new Set(), sems: new Set(), first: e.start, last: e.end };
+      const c = byCourse.get(e.courseId) || { title: e.title, lecturer: e.lecturer || null, nr: /^\d{3}\.\w{3}$/.test(e.courseId) ? e.courseId : null, kinds: new Set(), sems: new Set(), first: e.start, last: e.end };
       if (e.kind) c.kinds.add(e.kind);
       c.sems.add(semesterOf(e.start));
       if (e.start < c.first) c.first = e.start;
@@ -204,11 +207,13 @@ export class StudoStore extends DurableObject {
       const sems = new Set([...(old?.semesters ? old.semesters.split(",") : []), ...c.sems]);
       const first = old && old.first_start < c.first.toISOString() ? old.first_start : c.first.toISOString();
       const last = old && old.last_end > c.last.toISOString() ? old.last_end : c.last.toISOString();
-      this.sql.exec(`INSERT INTO courses(course_id, title, nr, kinds, first_start, last_end, semesters) VALUES(?,?,?,?,?,?,?)
+      this.sql.exec(`INSERT INTO courses(course_id, title, nr, kinds, first_start, last_end, semesters, lecturer) VALUES(?,?,?,?,?,?,?,?)
         ON CONFLICT(course_id) DO UPDATE SET title=excluded.title, nr=excluded.nr, kinds=excluded.kinds,
-        first_start=excluded.first_start, last_end=excluded.last_end, semesters=excluded.semesters`,
-        id, c.title, c.nr, [...kinds].join(","), first, last, [...sems].join(","));
+        first_start=excluded.first_start, last_end=excluded.last_end, semesters=excluded.semesters, lecturer=excluded.lecturer`,
+        id, c.title, c.nr, [...kinds].join(","), first, last, [...sems].join(","), c.lecturer);
     }
+    // Kurse ohne Termine (z. B. nach geänderter Kurs-ID) entfernen
+    this.sql.exec("DELETE FROM courses WHERE course_id NOT IN (SELECT DISTINCT course_id FROM events)");
   }
 
   // ---------- Noten & Studien ----------
@@ -351,7 +356,7 @@ export class StudoStore extends DurableObject {
     return buildCalendar(`${this.uni.name} · Studo+`, rows.map((r) => {
       const mandatory = !!r.attendance;
       const cancelled = r.status === "cancelled";
-      let summary = r.title + (r.kind ? ` (${r.kind})` : "");
+      let summary = (r.kind ? `${r.kind} ` : "") + r.title; // LVA-Art immer zuerst
       if (mandatory) summary = marker + summary;
       if (cancelled) summary = "Entfällt: " + summary;
       const notes = [];
@@ -387,6 +392,7 @@ export class StudoStore extends DurableObject {
       username: this.getSetting("username"),
       uni: { id: uniId, name: this.uni.name, auto: this.uni.auth === "jku", ical_hint: this.uni.icalHint },
       name: this.getSetting("display_name") || this.getSetting("kusss_name"),
+      name_source: this.getSetting("display_name") ? "manual" : this.getSetting("kusss_name") ? "uni" : null,
       matrikel: this.getSetting("matrikel") || matrikel(uniId, this.getSetting("username")),
       verified: this.getSetting("verified") === "1",
       demo: this.env.DEMO === "1",
@@ -502,7 +508,7 @@ export class StudoStore extends DurableObject {
           (SELECT MIN(e.start) FROM events e WHERE e.course_id = c.course_id AND e.status='confirmed' AND e.start > ?) AS next_start
         FROM courses c LEFT JOIN course_settings cs ON cs.course_id = c.course_id ORDER BY c.title`, now).toArray();
       const courses = rows.map((r) => ({
-        course_id: r.course_id, title: r.title, nr: r.nr, kinds: r.kinds, events: r.n, next_start: r.next_start,
+        course_id: r.course_id, title: r.title, nr: r.nr, kinds: r.kinds, lecturer: r.lecturer, events: r.n, next_start: r.next_start,
         first_start: r.first_start, last_end: r.last_end,
         semesters: r.semesters ? r.semesters.split(",") : [], attendance: !!r.attendance,
       }));

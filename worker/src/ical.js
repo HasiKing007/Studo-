@@ -53,6 +53,14 @@ function splitContentLine(line) {
 }
 
 export function cleanTitle(summary) {
+  // KUSSS: "KS Einführung in X / Vorname Nachname / (232427/2026W)" -> Titel, Lehrende, LVA-Nummer
+  const tail = summary.match(/\(\s*(\d{3})\.?(\d{3})\s*\/\s*(\d{4}[WS])\s*\)[^()]*$/);
+  if (tail) {
+    const kind = summary.match(KIND)?.[1] ?? null;
+    const parts = summary.slice(0, tail.index).split(/\s+\/\s+|\s*\/\s*$/).map((x) => x.trim()).filter(Boolean);
+    let title = (parts.shift() || "").replace(kind ? new RegExp(`^\\s*${kind}\\b\\s*|\\s*\\b${kind}\\s*$`) : /$^/, "").trim();
+    return { title: title || summary, kind, nr: `${tail[1]}.${tail[2]}`, lecturer: parts.join(", ") || null };
+  }
   const nr = summary.match(LVA_NR)?.[1] ?? null;
   const kind = summary.match(KIND)?.[1] ?? null;
   let title = summary;
@@ -61,7 +69,7 @@ export function cleanTitle(summary) {
   }
   title = title.replace(/\s*[/|\-–,]\s*(?=[/|\-–,]|$)/g, "");
   title = title.replace(/^[\s/|\-–,]+|[\s/|\-–,]+$/g, "").split(/\s+/).filter(Boolean).join(" ");
-  return { title: title || summary, kind, nr };
+  return { title: title || summary, kind, nr, lecturer: null };
 }
 
 /** Parst einen iCal-Text in eine Liste normalisierter Termine. */
@@ -85,7 +93,7 @@ export function parseICS(text) {
 
   return raw.filter((e) => e.DTSTART).map((e) => {
     const summary = unescapeText(e.SUMMARY?.value ?? "").trim();
-    const { title, kind, nr } = cleanTitle(summary);
+    const { title, kind, nr, lecturer } = cleanTitle(summary);
     const start = parseDate(e.DTSTART.value, e.DTSTART.params);
     const end = e.DTEND ? parseDate(e.DTEND.value, e.DTEND.params) : start;
     const status = (e.STATUS?.value ?? "CONFIRMED").toUpperCase();
@@ -94,6 +102,7 @@ export function parseICS(text) {
       courseId: nr || title.toLowerCase(),
       title,
       kind,
+      lecturer,
       start,
       end,
       location: e.LOCATION ? unescapeText(e.LOCATION.value) : null,
@@ -140,6 +149,7 @@ export function buildCalendar(name, events) {
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
     `X-WR-CALNAME:${escapeText(name)}`,
+    "X-APPLE-CALENDAR-COLOR:#D35400", // Apple Kalender übernimmt die Farbe beim Abonnieren
     `X-WR-TIMEZONE:${TZ}`,
     "REFRESH-INTERVAL;VALUE=DURATION:PT30M",
     "X-PUBLISHED-TTL:PT30M",

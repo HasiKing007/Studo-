@@ -1,15 +1,15 @@
-// Studo+ Frontend – bewusst ohne Framework. Fünf Tabs, ein Bottom-Sheet für Details, eigener Admin-Bereich.
+// Studo+ Frontend – bewusst ohne Framework. Fünf Tabs, Unterseiten wie in iOS (mit Zurück), eigener Admin-Bereich.
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 
 const state = {
-  me: null, unis: [], tab: "today",
-  cal: { mode: "day", day: midnight(new Date()) },
+  me: null, unis: [], tab: "home",
+  cal: { mode: "day", day: midnight(new Date()), scrolled: "" },
   sem: null, coursesData: null, gradesData: null, program: "all",
 };
 const WD = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
-const TAB_TITLES = { today: "Heute", calendar: "Kalender", courses: "Kurse", study: "Studium", settings: "Einstellungen", profile: "Persönliche Daten" };
-const COLORS = ["#D35400", "#007AFF", "#34C759", "#AF52DE", "#FF2D55", "#5AC8FA", "#FF9500", "#5856D6", "#30B0C7", "#A2845E"];
+const TAB_TITLES = { home: "Home", calendar: "Kalender", courses: "Kurse", study: "Studium", settings: "Einstellungen" };
+const HOUR = 48, H0 = 6, H1 = 23;
 const fmtTime = new Intl.DateTimeFormat("de-AT", { hour: "2-digit", minute: "2-digit" });
 const fmtDay = new Intl.DateTimeFormat("de-AT", { weekday: "long", day: "numeric", month: "long" });
 const fmtDayShort = new Intl.DateTimeFormat("de-AT", { weekday: "short", day: "numeric", month: "short" });
@@ -23,22 +23,37 @@ const fmtAvg = new Intl.NumberFormat("de-AT", { minimumFractionDigits: 2, maximu
 if (!("switch" in HTMLInputElement.prototype)) document.documentElement.classList.add("no-native-switch");
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");
 
+// ---------- Erscheinungsbild (Standard: hell) ----------
+function getTheme() { try { return localStorage.getItem("studo_theme") || "light"; } catch { return "light"; } }
+const darkQuery = matchMedia("(prefers-color-scheme: dark)");
+function applyTheme(theme = getTheme()) {
+  document.documentElement.dataset.theme = theme;
+  const dark = theme === "dark" || (theme === "auto" && darkQuery.matches);
+  $("#theme-color").content = dark ? "#000000" : "#F2F2F7";
+  $$("#theme-seg button").forEach((b) => b.classList.toggle("on", b.dataset.theme === theme));
+}
+applyTheme();
+darkQuery.addEventListener?.("change", () => applyTheme());
+$$("#theme-seg button").forEach((b) => b.addEventListener("click", () => {
+  try { localStorage.setItem("studo_theme", b.dataset.theme); } catch {}
+  applyTheme(b.dataset.theme); haptic();
+}));
+
 // ---------- Start-Animation ----------
-// Hält das Logo kurz, mindestens bis die Sitzung geprüft ist, dann gleitet der Vorhang nach oben.
-let splashStarted = Date.now();
+const splashStarted = Date.now();
 function endSplash() {
   const html = document.documentElement;
   const splash = $("#splash");
   if (!splash || html.classList.contains("splash-done")) return;
   const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const hold = Math.max(0, (reduced ? 200 : 1400) - (Date.now() - splashStarted));
+  const hold = Math.max(0, (reduced ? 100 : 900) - (Date.now() - splashStarted));
   let done = false;
   const finish = () => { if (done) return; done = true; splash.remove(); html.classList.add("splash-done"); };
   setTimeout(() => {
     splash.classList.add("is-leaving");
     html.classList.remove("splashing");
     splash.addEventListener("animationend", (e) => { if (e.target === splash) finish(); });
-    setTimeout(finish, reduced ? 400 : 1200); // Sicherheitsnetz
+    setTimeout(finish, 900);
   }, hold);
 }
 
@@ -96,8 +111,27 @@ const chev = () => svg('<path d="M9 5l7 7-7 7"/>', "chev");
 function row(label, value, cls = "") {
   const r = el("div", `row ${cls}`); r.append(el("span", "", label), el("span", "muted", value ?? "–")); return r;
 }
+function group(...rows) { const g = el("div", "group"); g.append(...rows.filter(Boolean)); return g; }
+function navRow(label, onClick, value) {
+  const r = el("button", "row row-nav");
+  r.append(el("span", "", label));
+  if (value) r.append(el("span", "value", value));
+  r.append(chev());
+  r.addEventListener("click", onClick);
+  return r;
+}
+function header(text) { return el("h2", "section-header", text); }
+function note(text) { return el("p", "footnote", text); }
 
-// Initialen aus dem echten Namen (z. B. "Jacob Haselgruber" -> "JH"), sonst Personen-Symbol
+// LVA-Art immer zuerst: "VL Analysis 1"
+function titleWithKind(kind, title, tag = "span") {
+  const n = el(tag);
+  if (kind) n.append(el("span", "kind", kind));
+  n.append(document.createTextNode(title));
+  return n;
+}
+
+// Initialen aus dem echten Namen ("Jacob Haselgruber" -> "JH"), sonst Personen-Symbol
 function initials(name) {
   const parts = String(name || "").trim().split(/\s+/).filter((p) => /^\p{L}/u.test(p));
   if (!parts.length) return "";
@@ -108,35 +142,17 @@ function setAvatar(node, name) {
   if (ini) node.textContent = ini;
   else node.replaceChildren(svg('<circle cx="12" cy="8.5" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7z"/>'));
 }
+function firstName(name) { return String(name || "").trim().split(/\s+/)[0] || ""; }
 
-// Kursfarbe: nach Kursliste durchnummeriert (keine Doppelten), sonst stabil aus der Kurs-ID
-const colorMap = new Map();
-function assignColors(courses) { courses.forEach((c, i) => colorMap.set(c.course_id, COLORS[i % COLORS.length])); }
-function courseColor(id) {
-  if (colorMap.has(id)) return colorMap.get(id);
-  let h = 0; for (const c of String(id)) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  return COLORS[h % COLORS.length];
+// KUSSS liefert Semester teils als "2024W"/"2025S" – einheitlich "WS 2024/25"/"SS 2025"
+function normSem(s) {
+  const m = /^(\d{4})\s*([WS])$/i.exec(String(s || "").trim());
+  if (!m) return s || null;
+  const y = +m[1];
+  return m[2].toUpperCase() === "W" ? `WS ${y}/${String(y + 1).slice(2)}` : `SS ${y}`;
 }
-
-// ---------- Bottom-Sheet ----------
-function openSheet(title, ...content) {
-  $("#sheet-title").textContent = title;
-  $("#sheet-body").replaceChildren(...content);
-  const sheet = $("#sheet"), bd = $("#sheet-backdrop");
-  sheet.classList.remove("closing"); bd.classList.remove("closing");
-  sheet.hidden = false; bd.hidden = false; sheet.scrollTop = 0;
-  document.body.style.overflow = "hidden";
-}
-function closeSheet() {
-  const sheet = $("#sheet"), bd = $("#sheet-backdrop");
-  if (sheet.hidden) return;
-  sheet.classList.add("closing"); bd.classList.add("closing");
-  setTimeout(() => { sheet.hidden = true; bd.hidden = true; sheet.classList.remove("closing"); bd.classList.remove("closing"); }, 240);
-  document.body.style.overflow = "";
-}
-$("#sheet-close").addEventListener("click", closeSheet);
-$("#sheet-backdrop").addEventListener("click", closeSheet);
-addEventListener("keydown", (e) => { if (e.key === "Escape") closeSheet(); });
+function semSort(s) { const m = /(WS|SS) (\d{4})/.exec(s || ""); return m ? +m[2] * 2 + (m[1] === "WS" ? 1 : 0) : -1; }
+function semShort(s) { return String(s).replace(/^(WS|SS) (\d{2})(\d{2})(\/\d+)?$/, "$1 $3$4"); }
 
 // Schalter mit sofortigem Feedback: UI ändert sich gleich, Server im Hintergrund, nur bei Fehler zurück
 function makeSwitch(checked, onChange) {
@@ -149,8 +165,112 @@ function makeSwitch(checked, onChange) {
   return sw;
 }
 
+// ---------- Unterseiten: Push-Navigation wie in iOS, mit Browser-Zurück ----------
+const stack = [];
+const shade = el("div", "page-shade");
+document.body.append(shade);
+history.replaceState({ depth: 0 }, "");
+
+function pushPage(title, build, { head = true } = {}) {
+  const prevTitle = stack.length ? stack[stack.length - 1].title : TAB_TITLES[state.tab];
+  const page = el("div", "page");
+  const bar = el("div", "navbar");
+  const back = el("button", "back");
+  back.append(svg('<path d="M15 5l-7 7 7 7"/>'), el("span", "", prevTitle));
+  back.addEventListener("click", () => history.back());
+  bar.append(back, el("div", "navbar-title", title), el("div"));
+  const body = el("div", "page-body");
+  page.append(bar, body);
+  if (!head) page.classList.add("plain");
+  const entry = { page, title, body, build };
+  build(body, entry);
+  page.addEventListener("scroll", () => page.classList.toggle("scrolled", page.scrollTop > 30), { passive: true });
+  enableEdgeSwipe(page);
+  $("#pages").append(page);
+  stack.at(-1)?.page.classList.add("under");
+  stack.push(entry);
+  shade.classList.add("on");
+  document.body.classList.add("locked");
+  requestAnimationFrame(() => requestAnimationFrame(() => page.classList.add("in")));
+  history.pushState({ depth: stack.length }, "");
+  return entry;
+}
+function refreshPage(entry) { entry.body.replaceChildren(); entry.build(entry.body, entry); }
+function popTop() {
+  const top = stack.pop();
+  if (!top) return;
+  top.page.style.transform = "";
+  top.page.classList.remove("in", "dragging");
+  setTimeout(() => top.page.remove(), 460);
+  const prev = stack.at(-1);
+  if (prev) { prev.page.classList.remove("under"); if (prev.refresh) prev.refresh(); }
+  else { shade.classList.remove("on"); document.body.classList.toggle("locked", state.tab === "calendar"); renderTab(state.tab); }
+}
+addEventListener("popstate", (e) => {
+  const depth = e.state?.depth || 0;
+  while (stack.length > depth) popTop();
+});
+function closeAllPages() {
+  while (stack.length) stack.pop().page.remove();
+  shade.classList.remove("on"); document.body.classList.toggle("locked", state.tab === "calendar" && !$("#app").hidden);
+}
+
+// Wischen vom linken Rand zurück (nur als Home-Bildschirm-App; im Safari-Browser macht das Safari selbst)
+function enableEdgeSwipe(page) {
+  if (!navigator.standalone && !matchMedia("(display-mode: standalone)").matches) return;
+  let x0 = null, dx = 0, t0 = 0;
+  page.addEventListener("touchstart", (e) => {
+    if (e.touches[0].clientX > 28) return;
+    x0 = e.touches[0].clientX; dx = 0; t0 = Date.now(); page.classList.add("dragging");
+  }, { passive: true });
+  page.addEventListener("touchmove", (e) => {
+    if (x0 === null) return;
+    dx = Math.max(0, e.touches[0].clientX - x0);
+    page.style.transform = `translate3d(${dx}px,0,0)`;
+  }, { passive: true });
+  page.addEventListener("touchend", () => {
+    if (x0 === null) return;
+    x0 = null; page.classList.remove("dragging");
+    const fast = dx / Math.max(1, Date.now() - t0) > 0.5;
+    if (dx > innerWidth / 3 || (fast && dx > 40)) history.back();
+    else page.style.transform = "";
+  });
+}
+
+// Formular-Seite (Note hinzufügen, KUSSS-Passwort, Studienrichtung …)
+function formPage(title, fields, submitLabel, onSubmit, footnote) {
+  pushPage(title, (body) => {
+    const form = el("form");
+    const g = el("div", "group");
+    for (const f of fields) {
+      const l = el("label", "row");
+      let input;
+      if (f.options) { input = el("select"); input.append(...f.options.map(([v, t]) => new Option(t, v))); }
+      else { input = el("input"); input.type = f.type || "text"; if (f.placeholder) input.placeholder = f.placeholder; if (f.inputmode) input.inputMode = f.inputmode; }
+      input.name = f.name; if (f.required) input.required = true; if (f.value !== undefined && f.value !== null) input.value = f.value;
+      if (f.autocomplete) input.autocomplete = f.autocomplete;
+      if (f.onChange) input.addEventListener("change", () => f.onChange(input, form));
+      l.append(el("span", "row-label", f.label), input);
+      if (f.hidden) l.hidden = true;
+      g.append(l);
+    }
+    const btn = el("button", "btn-primary", submitLabel); btn.type = "submit";
+    const errP = el("p", "error");
+    form.append(g, ...(footnote ? [note(footnote)] : []), btn, errP);
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault(); errP.textContent = ""; btn.disabled = true;
+      const old = btn.textContent; btn.textContent = "Bitte warten …";
+      try { await onSubmit(Object.fromEntries(new FormData(form)), form); history.back(); }
+      catch (err) { errP.textContent = err.message; }
+      finally { btn.disabled = false; btn.textContent = old; }
+    });
+    body.append(el("div", "page-head", undefined), form);
+    $(".page-head", body).append(el("h1", "", title));
+  });
+}
+
 // ---------- Login ----------
-function hideAll() { ["#login", "#admin-login", "#admin-screen", "#app"].forEach((s) => ($(s).hidden = true)); closeSheet(); }
+function hideAll() { ["#login", "#admin-login", "#admin-screen", "#app"].forEach((s) => ($(s).hidden = true)); closeAllPages(); }
 function showLogin() {
   hideAll(); $("#login").hidden = false; endSplash();
   if (!state.unis.length) loadUnis();
@@ -167,14 +287,11 @@ async function loadUnis() {
 function updateLoginHint() {
   const u = state.unis.find((x) => x.id === $("#login-uni").value);
   if (!u) return;
-  $("#login-user-label").textContent = u.userLabel;
-  $("#login-form [name=username]").placeholder = u.userPlaceholder;
-  $("#login-form [name=username]").inputMode = u.id === "jku" ? "numeric" : "text";
+  const user = $("#login-user");
+  user.placeholder = u.userLabel; user.setAttribute("aria-label", u.userLabel);
   $("#login-hint").textContent = u.auto
-    ? `Mit Matrikelnummer und Passwort deines ${u.name}-Accounts anmelden. Stundenplan und Noten kommen automatisch aus KUSSS. ` +
-      "Das Passwort geht nur an die Uni und wird nie im Klartext gespeichert."
-    : `Für ${u.name} gibt es noch keinen automatischen Login. Beim ersten Mal legst du ein eigenes ` +
-      "Studo+-Passwort fest und fügst danach den iCal-Link deines Stundenplans ein.";
+    ? "Mit deinem JKU-Account. Das Passwort wird nicht gespeichert."
+    : `Beim ersten Login legst du ein eigenes Passwort fest und verbindest danach deinen Stundenplan per iCal-Link.`;
 }
 $("#login-uni").addEventListener("change", updateLoginHint);
 
@@ -184,7 +301,7 @@ $("#login-form").addEventListener("submit", async (e) => {
   const btn = $("#login-form .btn-primary");
   const uni = state.unis.find((x) => x.id === f.get("uni"));
   btn.disabled = true; $(".spinner", btn).hidden = false;
-  $(".label", btn).textContent = uni?.auto ? `Verbinde mit ${uni.name} …` : "Anmelden …";
+  $(".label", btn).textContent = uni?.auto ? "Verbinde mit KUSSS …" : "Anmelden …";
   $("#login-error").textContent = "";
   try {
     await post("/api/login", { uni: f.get("uni"), username: f.get("username"), password: f.get("password") });
@@ -228,7 +345,6 @@ async function renderAdmin(data) {
   $("#admin-stats").replaceChildren(...stats.map(([v, l]) => {
     const s = el("div", "stat"); s.append(el("div", "stat-value", String(v)), el("div", "stat-label", l)); return s;
   }));
-
   const max = Math.max(1, ...data.days.map((d) => d.opens + d.logins + d.feed));
   $("#admin-chart").replaceChildren(...data.days.map((d, i) => {
     const col = el("div", "col");
@@ -239,12 +355,10 @@ async function renderAdmin(data) {
     if (i % 3 === 1 || i === 13) col.append(el("span", "lbl", fmtShort.format(new Date(d.day))));
     return col;
   }));
-
   if (!state.unis.length) state.unis = await api("/api/unis").catch(() => []);
   const names = Object.fromEntries(state.unis.map((u) => [u.id, u.name]));
   const unis = Object.entries(data.by_uni).sort((a, b) => b[1] - a[1]);
   $("#admin-unis").replaceChildren(...(unis.length ? unis : [["–", 0]]).map(([id, n]) => row(names[id] || id, String(n))));
-
   $("#admin-users").replaceChildren(...(data.users.length ? data.users.map((u) => {
     const r = el("div", "row user-row");
     const head = el("div", "user-head");
@@ -261,22 +375,27 @@ async function renderAdmin(data) {
 }
 
 // ---------- Tabs ----------
-$$(".tabbar button").forEach((b) => b.addEventListener("click", () => { haptic(); switchTab(b.dataset.tab); }));
-$("#avatar").addEventListener("click", () => switchTab("profile"));
-$("#btn-profile").addEventListener("click", () => switchTab("profile"));
-$$("[data-back]").forEach((b) => b.addEventListener("click", () => switchTab(b.dataset.back)));
+$$(".tabbar button").forEach((b) => b.addEventListener("click", () => {
+  if (b.dataset.tab === state.tab) { window.scrollTo({ top: 0, behavior: "smooth" }); return; }
+  haptic(); switchTab(b.dataset.tab);
+}));
+$("#avatar").addEventListener("click", openProfile);
+$("#btn-profile").addEventListener("click", openProfile);
+$("#btn-connection").addEventListener("click", openConnection);
+$("#btn-abo").addEventListener("click", openAbo);
 
 function switchTab(name) {
   state.tab = name;
-  const navName = name === "profile" ? "settings" : name;
-  $$(".tabbar button").forEach((b) => b.classList.toggle("active", b.dataset.tab === navName));
+  $$(".tabbar button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   $$(".tab").forEach((t) => (t.hidden = t.id !== `tab-${name}`));
   $("#appbar-title").textContent = TAB_TITLES[name] || "";
+  document.body.classList.toggle("locked", name === "calendar" || stack.length > 0);
   window.scrollTo({ top: 0 });
+  $("#appbar").classList.remove("scrolled");
   renderTab(name);
 }
 function renderTab(name) {
-  const run = { today: renderToday, calendar: renderCalendar, courses: renderCourses, study: renderStudy, settings: renderSettings, profile: renderProfile }[name];
+  const run = { home: renderHome, calendar: renderCalendar, courses: renderCourses, study: renderStudy, settings: renderSettings }[name];
   if (run) Promise.resolve(run()).catch((err) => console.error(err));
 }
 addEventListener("scroll", () => $$(".appbar").forEach((a) => a.classList.toggle("scrolled", scrollY > 40)), { passive: true });
@@ -288,17 +407,16 @@ function errorBox(box, err, what = "Termine") {
   box.replaceChildren(el("div", "row empty-row", `${what} konnten nicht geladen werden: ${err.message}`));
 }
 
-// ---------- Termin-Zeile und Termin-Details ----------
+// ---------- Termin-Zeile und Termin-Seite ----------
 function evRow(ev) {
   const r = el("button", "row ev-row");
-  r.style.setProperty("--c", courseColor(ev.course_id));
   r.classList.toggle("cancelled", ev.status === "cancelled");
   const s = new Date(ev.start), e = new Date(ev.end);
-  const time = el("div", "ev-time", fmtTime.format(s)); time.append(el("span", "", fmtTime.format(e)));
+  const time = el("div", "ev-time", fmtTime.format(s));
+  time.append(el("span", "", fmtTime.format(e)));
   const main = el("div", "ev-main");
-  const title = el("div", "ev-title", ev.title);
-  if (ev.kind) title.append(el("span", "kind", ev.kind));
-  main.append(title, el("div", "ev-loc", ev.status === "cancelled" ? "Entfällt" : ev.location || "Ort unbekannt"));
+  main.append(titleWithKind(ev.kind, ev.title, "div"), el("div", "ev-loc", ev.status === "cancelled" ? "Entfällt" : ev.location || "Ort unbekannt"));
+  main.firstChild.className = "ev-title";
   r.append(time, el("div", "ev-bar"), main);
   if (ev.attendance) { const m = el("span", "must", "!"); m.title = "Anwesenheitspflicht"; r.append(m); } else r.append(el("span"));
   r.addEventListener("click", () => openEvent(ev));
@@ -306,86 +424,85 @@ function evRow(ev) {
 }
 
 function openEvent(ev) {
-  const s = new Date(ev.start), e = new Date(ev.end);
-  const info = el("div", "group");
-  info.append(
-    row("Datum", fmtDay.format(s)),
-    row("Zeit", `${fmtTime.format(s)} – ${fmtTime.format(e)}`),
-    row("Ort", ev.location || "unbekannt"),
-  );
-  if (ev.kind) info.append(row("Art", ev.kind));
-  if (ev.status === "cancelled") info.append(row("Status", "Entfällt"));
-  if (ev.room_raw && ev.room_raw !== ev.room) info.append(row("Laut Uni", ev.room_raw));
+  const course = state.coursesData?.courses.find((c) => c.course_id === ev.course_id);
+  pushPage(ev.title, (body) => {
+    const s = new Date(ev.start), e = new Date(ev.end);
+    const head = el("div", "page-head");
+    head.append(titleWithKind(ev.kind, ev.title, "h1"),
+      el("p", "", `${fmtDay.format(s)} · ${fmtTime.format(s)} – ${fmtTime.format(e)}`));
+    body.append(head);
+    body.append(group(
+      row("Ort", ev.location || "unbekannt"),
+      ev.room_raw && ev.room_raw !== ev.room ? row("Laut Uni", ev.room_raw) : null,
+      course?.lecturer ? row("Lehrende", course.lecturer) : null,
+      ev.status === "cancelled" ? row("Status", "Entfällt") : null,
+    ));
 
-  // Anwesenheitspflicht ist eine Zusatzfunktion: Kurs-Standard + optionale Ausnahme für diesen Termin
-  const att = el("div", "group");
-  const courseRow = el("label", "row");
-  courseRow.append(el("span", "", "Anwesenheitspflicht im Kurs"), makeSwitch(ev.course_attendance, async (v) => {
-    await put(`/api/courses/${encodeURIComponent(ev.course_id)}/attendance`, { attendance: v });
-    ev.course_attendance = v; if (!ev.is_override) ev.attendance = v;
-    renderTab(state.tab);
-  }));
-  const segRow = el("div", "row row-stack");
-  segRow.append(el("span", "", "Nur dieser Termin"));
-  const seg = el("div", "segmented");
-  const current = ev.is_override ? (ev.attendance ? "1" : "0") : "inherit";
-  for (const [v, label] of [["inherit", "Wie Kurs"], ["1", "Pflicht"], ["0", "Keine"]]) {
-    const b = el("button", v === current ? "on" : "", label);
-    b.addEventListener("click", async () => {
-      const value = v === "inherit" ? null : v === "1";
-      try {
-        await put(`/api/events/${encodeURIComponent(ev.uid)}/attendance`, { attendance: value });
-        $$("button", seg).forEach((x) => x.classList.toggle("on", x === b)); haptic();
-        ev.is_override = value !== null; ev.attendance = value === null ? ev.course_attendance : value;
-        renderTab(state.tab);
-      } catch (err) { alert(err.message); }
-    });
-    seg.append(b);
-  }
-  segRow.append(seg);
-  att.append(courseRow, segRow);
-
-  const courseBtn = el("button", "row row-btn row-nav", "Kurs anzeigen");
-  courseBtn.append(chev());
-  courseBtn.addEventListener("click", () => openCourse(ev.course_id));
-
-  openSheet(ev.title, info, el("h3", "section-header", "Anwesenheitspflicht"), att,
-    el("p", "footnote", "Markierte Termine bekommen im Apple Kalender ein Zeichen vor dem Namen."),
-    (() => { const g = el("div", "group group-spaced"); g.append(courseBtn); return g; })());
+    // Anwesenheitspflicht ist eine Zusatzfunktion: Kurs-Standard + optionale Ausnahme für diesen Termin
+    const courseRow = el("label", "row");
+    courseRow.append(el("span", "", "Alle Termine des Kurses"), makeSwitch(ev.course_attendance, async (v) => {
+      await put(`/api/courses/${encodeURIComponent(ev.course_id)}/attendance`, { attendance: v });
+      ev.course_attendance = v; if (!ev.is_override) ev.attendance = v;
+      if (course) course.attendance = v;
+    }));
+    const segRow = el("div", "row row-stack");
+    segRow.append(el("span", "", "Nur dieser Termin"));
+    const seg = el("div", "segmented seg-full");
+    const current = ev.is_override ? (ev.attendance ? "1" : "0") : "inherit";
+    for (const [v, label] of [["inherit", "Wie Kurs"], ["1", "Pflicht"], ["0", "Keine"]]) {
+      const b = el("button", v === current ? "on" : "", label);
+      b.addEventListener("click", async () => {
+        const value = v === "inherit" ? null : v === "1";
+        try {
+          await put(`/api/events/${encodeURIComponent(ev.uid)}/attendance`, { attendance: value });
+          $$("button", seg).forEach((x) => x.classList.toggle("on", x === b)); haptic();
+          ev.is_override = value !== null; ev.attendance = value === null ? ev.course_attendance : value;
+        } catch (err) { alert(err.message); }
+      });
+      seg.append(b);
+    }
+    segRow.append(seg);
+    body.append(header("Anwesenheitspflicht"), group(courseRow, segRow),
+      note("Markierte Termine bekommen im Apple Kalender ein „!“ vor dem Namen."));
+    body.append(el("div", "group-spaced"), group(navRow("Kurs anzeigen", () => openCourse(ev.course_id))));
+  });
 }
 
-// ---------- Tab: Heute ----------
-async function renderToday() {
+// ---------- Tab: Home ----------
+function greeting() {
+  const h = new Date().getHours();
+  const hi = h < 11 ? "Guten Morgen" : h < 18 ? "Hallo" : "Guten Abend";
+  const n = firstName(state.me?.name);
+  return n ? `${hi}, ${n}` : hi;
+}
+
+async function renderHome() {
   const now = new Date();
+  $("#greeting").textContent = greeting();
   $("#today-date").textContent = fmtDay.format(now);
   const me = state.me;
-  const notice = me.notice || me.last_sync_error || (!me.connected ? "Noch kein Stundenplan verbunden. Unter Einstellungen kannst du ihn einrichten." : "");
+  const notice = me.notice || me.last_sync_error || (!me.connected ? "Noch kein Stundenplan verbunden. Unter Einstellungen › Verbindung zur Uni richtest du ihn ein." : "");
   $("#notice").hidden = !notice; $("#notice").textContent = notice;
 
   const list = $("#today-list"), next = $("#next-card");
   let events;
   try { events = await fetchEvents(midnight(now), addDays(midnight(now), 14)); } catch (err) { next.replaceChildren(); errorBox(list, err); return; }
-  const live = events.filter((e) => e.status !== "cancelled" && new Date(e.end) > now);
-  const upcoming = live[0];
+  const upcoming = events.find((e) => e.status !== "cancelled" && new Date(e.end) > now);
   next.replaceChildren();
   if (upcoming) {
     const s = new Date(upcoming.start), running = s <= now;
     const card = el("button", "next");
-    card.style.setProperty("--c", courseColor(upcoming.course_id));
     const mins = Math.round((s - now) / 60000);
-    const label = running ? "Läuft gerade" : mins < 60 ? `In ${mins} Min.` : `Als Nächstes · ${inDays(s)}`;
-    card.append(el("div", "next-label", label), el("div", "next-title", upcoming.title),
-      el("div", "next-meta", `${fmtTime.format(s)} – ${fmtTime.format(new Date(upcoming.end))} · ${upcoming.location || "Ort unbekannt"}`));
+    const when = running ? "läuft gerade" : mins < 60 ? `in ${mins} Min.` : `${inDays(s)}, ${fmtTime.format(s)}`;
+    const label = el("div", "next-label", "Als Nächstes · "); label.append(el("b", "", when));
+    const t = titleWithKind(upcoming.kind, upcoming.title, "div"); t.className = "next-title";
+    card.append(label, t, el("div", "next-meta", `${fmtTime.format(s)} – ${fmtTime.format(new Date(upcoming.end))} · ${upcoming.location || "Ort unbekannt"}`));
     card.addEventListener("click", () => openEvent(upcoming));
     next.append(card);
   }
-
   const todays = events.filter((e) => dayKey(new Date(e.start)) === dayKey(now));
-  $("#today-head").textContent = "Termine heute";
-  list.replaceChildren(...todays.map(evRow));
-  if (!todays.length) {
-    list.append(el("div", "row empty-row", events.length ? "Heute keine Termine." : "Keine Termine in den nächsten zwei Wochen."));
-  }
+  list.replaceChildren(...todays.map((e) => evRow(e)));
+  if (!todays.length) list.append(el("div", "row empty-row", "Heute keine Termine"));
 }
 
 const ICONS = {
@@ -406,20 +523,18 @@ function renderLinks() {
     a.append(ico, l.name);
     return a;
   }));
-  $("#links-hint").textContent = links.length && state.me.uni.auto
-    ? "Öffnet direkt die Anmeldung der JKU. Bist du im Browser schon einmal angemeldet, geht es ohne Passwort weiter."
-    : "";
 }
 
 // ---------- Tab: Kalender (Tag, Woche, Liste) ----------
 $$("#cal-mode button").forEach((b) => b.addEventListener("click", () => {
+  if (state.cal.mode === b.dataset.mode) return;
   state.cal.mode = b.dataset.mode; haptic();
   try { localStorage.setItem("studo_calmode", b.dataset.mode); } catch {}
   renderCalendar();
 }));
 $("#cal-prev").addEventListener("click", () => moveCal(-1));
 $("#cal-next").addEventListener("click", () => moveCal(1));
-$("#cal-today").addEventListener("click", () => { state.cal.day = midnight(new Date()); haptic(); renderCalendar(); });
+$("#cal-today").addEventListener("click", () => { state.cal.day = midnight(new Date()); state.cal.scrolled = ""; haptic(); renderCalendar(); });
 function moveCal(dir) { state.cal.day = addDays(state.cal.day, state.cal.mode === "day" ? dir : dir * 7); haptic(); renderCalendar(); }
 
 // Wischen nach links/rechts blättert
@@ -434,6 +549,16 @@ function moveCal(dir) { state.cal.day = addDays(state.cal.day, state.cal.mode ==
     x0 = null;
   }, { passive: true });
 })();
+
+// Kalenderbereich füllt genau den Platz zwischen Kopf und Tab-Leiste: Kopf bleibt stehen, nur das Raster scrollt
+function sizeCalendar() {
+  const v = $("#cal-view");
+  if ($("#tab-calendar").hidden) return;
+  const top = v.getBoundingClientRect().top + scrollY;
+  const bottom = $(".tabbar").offsetHeight + 10;
+  v.style.height = `${Math.max(240, innerHeight - top - bottom)}px`;
+}
+addEventListener("resize", sizeCalendar);
 
 let calSeq = 0;
 async function renderCalendar() {
@@ -450,7 +575,6 @@ async function renderCalendar() {
   if (seq !== calSeq) return; // inzwischen weitergeblättert
   const byDay = events.reduce((m, e) => ((m[dayKey(new Date(e.start))] ??= []).push(e), m), {});
 
-  // Wochenleiste (nur in der Tagesansicht)
   const strip = $("#week-strip");
   strip.hidden = mode !== "day";
   if (mode === "day") {
@@ -465,57 +589,56 @@ async function renderCalendar() {
       return b;
     }));
   }
+  view.classList.toggle("list", mode === "list");
 
   if (mode === "list") {
     const out = [];
     for (let i = 0; i < 7; i++) {
       const d = addDays(ws, i), list = byDay[dayKey(d)];
       if (!list) continue;
-      out.push(el("div", "day-head", fmtDay.format(d)));
-      const g = el("div", "group"); g.append(...list.map(evRow)); out.push(g);
+      out.push(el("div", "day-head", fmtDay.format(d)), group(...list.map((e) => evRow(e))));
     }
-    if (!out.length) { const g = el("div", "group"); g.append(el("div", "row empty-row", "Keine Termine in dieser Woche.")); out.push(g); }
+    if (!out.length) out.push(group(el("div", "row empty-row", "Keine Termine in dieser Woche")));
     view.replaceChildren(...out);
-    return;
+  } else {
+    const days = mode === "day" ? [day]
+      : Array.from({ length: [5, 6].some((i) => byDay[dayKey(addDays(ws, i))]) ? 7 : 5 }, (_, i) => addDays(ws, i));
+    view.replaceChildren(timeGrid(days, byDay, mode));
   }
+  sizeCalendar();
 
-  let days;
-  if (mode === "day") days = [day];
-  else {
-    const weekend = [5, 6].some((i) => byDay[dayKey(addDays(ws, i))]);
-    days = Array.from({ length: weekend ? 7 : 5 }, (_, i) => addDays(ws, i));
+  // Beim ersten Anzeigen eines Tages/einer Woche zum ersten Termin bzw. zur aktuellen Uhrzeit scrollen
+  const key = `${mode}:${dayKey(mode === "day" ? day : ws)}`;
+  if (state.cal.scrolled !== key) {
+    state.cal.scrolled = key;
+    if (mode === "list") view.scrollTop = 0;
+    else {
+      const shown = mode === "day" ? byDay[dayKey(day)] || [] : events;
+      const first = shown.length ? Math.min(...shown.map((e) => new Date(e.start).getHours() + new Date(e.start).getMinutes() / 60)) : 8;
+      const now = new Date(), nowH = now.getHours() + now.getMinutes() / 60;
+      const isNow = mode === "day" ? dayKey(day) === dayKey(now) : ws <= now && now < we;
+      const last = shown.length ? Math.max(...shown.map((e) => new Date(e.end).getHours())) : 18;
+      const target = mode === "day" && isNow && nowH > first && nowH < last ? nowH - 1 : first - .5;
+      view.scrollTop = Math.max(0, (target - H0) * HOUR);
+    }
   }
-  view.replaceChildren(timeGrid(days, byDay, mode));
 }
 
-// Zeitraster wie im Apple Kalender: Stundenlinien, Blöcke nach Uhrzeit, rote Jetzt-Linie
+// Zeitraster wie im Apple Kalender: Stundenlinien, Blöcke nach Uhrzeit, Jetzt-Linie
 function timeGrid(days, byDay, mode) {
-  const HOUR = 52;
-  const evs = days.flatMap((d) => byDay[dayKey(d)] || []);
-  let h0 = 8, h1 = 18;
-  for (const e of evs) {
-    const s = new Date(e.start), en = new Date(e.end);
-    h0 = Math.min(h0, s.getHours());
-    h1 = Math.max(h1, en.getHours() + (en.getMinutes() ? 1 : 0));
-  }
-  h1 = Math.min(24, Math.max(h1, h0 + 6));
-  const height = (h1 - h0) * HOUR;
-
+  const height = (H1 - H0) * HOUR;
   const grid = el("div", `grid ${mode}`);
   grid.style.setProperty("--days", days.length);
+  grid.style.setProperty("--hour", `${HOUR}px`);
   const today = dayKey(new Date());
-  // Kopfzeile (nur Woche)
   if (mode === "week") {
     const head = el("div", "grid-head");
     head.append(el("div"));
-    for (const d of days) {
-      const h = el("div", dayKey(d) === today ? "today" : "", `${WD[(d.getDay() + 6) % 7]} ${d.getDate()}`);
-      head.append(h);
-    }
+    for (const d of days) head.append(el("div", dayKey(d) === today ? "today" : "", `${WD[(d.getDay() + 6) % 7]} ${d.getDate()}`));
     grid.append(head);
   }
   const hours = el("div", "hours"); hours.style.height = `${height}px`;
-  for (let h = h0 + 1; h < h1; h++) { const s = el("span", "", `${h}:00`); s.style.top = `${(h - h0) * HOUR}px`; hours.append(s); }
+  for (let h = H0 + 1; h < H1; h++) { const s = el("span", "", `${h}:00`); s.style.top = `${(h - H0) * HOUR}px`; hours.append(s); }
   grid.append(hours);
 
   for (const d of days) {
@@ -523,7 +646,6 @@ function timeGrid(days, byDay, mode) {
     col.style.height = `${height}px`;
     col.classList.toggle("is-today", dayKey(d) === today && mode === "week");
     const list = (byDay[dayKey(d)] || []).slice().sort((a, b) => new Date(a.start) - new Date(b.start));
-    // Überschneidungen nebeneinander legen
     const lanes = [];
     const placed = list.map((e) => {
       const s = new Date(e.start), en = new Date(e.end);
@@ -534,130 +656,151 @@ function timeGrid(days, byDay, mode) {
     for (const p of placed) {
       const overlapping = placed.filter((q) => q.s < p.en && q.en > p.s);
       const n = Math.max(...overlapping.map((q) => q.lane)) + 1;
-      const top = ((p.s.getHours() + p.s.getMinutes() / 60) - h0) * HOUR;
-      const dur = Math.max(22, ((p.en - p.s) / 3600000) * HOUR - 2);
+      const top = Math.max(0, ((p.s.getHours() + p.s.getMinutes() / 60) - H0) * HOUR);
+      const dur = Math.max(20, ((p.en - p.s) / 3600000) * HOUR - 2);
       const b = el("button", "block");
       b.classList.toggle("cancelled", p.e.status === "cancelled");
-      b.style.setProperty("--c", courseColor(p.e.course_id));
       b.style.top = `${top + 1}px`; b.style.height = `${dur}px`;
       b.style.left = `${(p.lane / n) * 100}%`; b.style.width = `calc(${100 / n}% - 3px)`;
-      b.append(el("b", "", p.e.title));
+      b.append(titleWithKind(p.e.kind, p.e.title, "b"));
       if (mode === "day") b.append(el("span", "", `${fmtTime.format(p.s)} – ${fmtTime.format(p.en)}${p.e.location ? " · " + p.e.location : ""}`));
       if (p.e.attendance) b.append(el("span", "must", "!"));
       b.addEventListener("click", () => openEvent(p.e));
       col.append(b);
     }
     if (dayKey(d) === today) {
-      const now = new Date(), y = ((now.getHours() + now.getMinutes() / 60) - h0) * HOUR;
+      const now = new Date(), y = ((now.getHours() + now.getMinutes() / 60) - H0) * HOUR;
       if (y >= 0 && y <= height) { const line = el("div", "now-line"); line.style.top = `${y}px`; col.append(line); }
     }
-    if (!list.length && mode === "day") {
-      const empty = el("div", "grid-empty", "Keine Termine");
-      col.append(empty);
-    }
+    if (!list.length && mode === "day") col.append(el("div", "grid-empty", "Keine Termine"));
     grid.append(col);
   }
   return grid;
 }
 
-// ---------- Tab: Kurse (nach Semester filterbar) ----------
-async function loadCourses() { state.coursesData = await api("/api/courses"); assignColors(state.coursesData.courses); return state.coursesData; }
+// ---------- Tab: Kurse (alle Semester, auch frühere aus den Noten) ----------
+async function loadCourses() { state.coursesData = await api("/api/courses"); return state.coursesData; }
+async function loadGrades() {
+  state.gradesData = await api("/api/grades");
+  for (const g of state.gradesData.grades) g.semester = normSem(g.semester);
+  return state.gradesData;
+}
+
+function normTitle(s) { return String(s || "").toLowerCase().replace(/[^a-z0-9äöüß]/g, ""); }
+function gradeMatches(g, course) {
+  const nr = String(course.nr || "").replace(/\D/g, "");
+  if (nr && String(g.nr || "").replace(/\D/g, "") === nr) return true;
+  return normTitle(g.title) && normTitle(g.title) === normTitle(course.title) && (!g.kind || !course.kinds || course.kinds.includes(g.kind))
+    && (!g.semester || !course.semesters?.length || course.semesters.includes(g.semester));
+}
+function matchGrade(course) { return (state.gradesData?.grades || []).find((g) => gradeMatches(g, course)); }
+
+function courseEntries() {
+  const courses = state.coursesData?.courses || [];
+  const grades = state.gradesData?.grades || [];
+  const out = courses.map((c) => ({ id: c.course_id, title: c.title, kind: (c.kinds || "").split(",")[0] || null, semesters: c.semesters, course: c, grade: matchGrade(c) }));
+  for (const g of grades) {
+    if (courses.some((c) => gradeMatches(g, c))) continue;
+    out.push({ id: `g${g.id}`, title: g.title, kind: g.kind, semesters: g.semester ? [g.semester] : [], grade: g });
+  }
+  return out.sort((a, b) => a.title.localeCompare(b.title, "de"));
+}
+
 async function renderCourses() {
   const box = $("#course-list");
-  let data;
-  try { data = await loadCourses(); } catch (err) { errorBox(box, err, "Kurse"); return; }
-  const sems = data.semesters;
-  if (!state.sem || (state.sem !== "all" && !sems.includes(state.sem))) state.sem = sems.includes(data.current) ? data.current : sems[0] || "all";
+  try { await Promise.all([loadCourses(), state.gradesData ? null : loadGrades().catch(() => null)]); }
+  catch (err) { errorBox(box, err, "Kurse"); return; }
+  const entries = courseEntries();
+  const sems = [...new Set(entries.flatMap((e) => e.semesters))].sort((a, b) => semSort(b) - semSort(a));
+  const current = state.coursesData.current;
+  if (!state.sem || (state.sem !== "all" && !sems.includes(state.sem))) state.sem = sems.includes(current) ? current : sems[0] || "all";
   const chips = ["all", ...sems].map((s) => {
-    const c = el("button", `chip${s === state.sem ? " on" : ""}`, s === "all" ? "Alle" : s);
+    const c = el("button", `chip${s === state.sem ? " on" : ""}`, s === "all" ? "Alle" : semShort(s));
     c.addEventListener("click", () => { state.sem = s; haptic(); renderCourses(); });
     return c;
   });
-  $("#sem-chips").replaceChildren(...(sems.length > 0 ? chips : []));
-  const list = data.courses.filter((c) => state.sem === "all" || c.semesters.includes(state.sem));
-  $("#courses-sub").textContent = `${list.length} ${list.length === 1 ? "Kurs" : "Kurse"}${state.sem !== "all" ? ` im ${state.sem}` : ""}`;
-  box.replaceChildren(...list.map((c) => {
+  $("#sem-chips").replaceChildren(...(sems.length ? chips : []));
+  const list = entries.filter((e) => state.sem === "all" || e.semesters.includes(state.sem));
+  $("#courses-sub").textContent = `${list.length} ${list.length === 1 ? "Kurs" : "Kurse"}${state.sem !== "all" ? ` · ${state.sem}` : ""}`;
+  box.replaceChildren(...list.map((e) => {
     const r = el("button", "row course-row");
-    r.style.setProperty("--c", courseColor(c.course_id));
     const text = el("span", "course-text");
-    const t = el("span", "course-title", c.title);
-    if (c.kinds) t.append(el("span", "kind", c.kinds));
-    const sub = [c.next_start ? `Nächster Termin ${inDays(new Date(c.next_start))}` : "Keine weiteren Termine", `${c.events} Termine`];
-    text.append(t, el("span", "course-sub", sub.join(" · ")));
-    r.append(el("span", "dot-c"), text);
-    if (c.attendance) r.append(el("span", "must", "!"));
+    const t = titleWithKind(e.kind, e.title); t.className = "course-title";
+    let sub;
+    if (e.course) sub = e.course.next_start ? `Nächster Termin ${inDays(new Date(e.course.next_start))}, ${fmtTime.format(new Date(e.course.next_start))}` : "Keine weiteren Termine";
+    else sub = [e.grade?.ects ? `${fmtNum.format(e.grade.ects)} ECTS` : null, e.semesters[0]].filter(Boolean).join(" · ");
+    text.append(t, el("span", "course-sub", sub));
+    r.append(text);
+    if (e.grade) r.append(gradePill(e.grade));
+    if (e.course?.attendance) r.append(el("span", "must", "!"));
     r.append(chev());
-    r.addEventListener("click", () => openCourse(c.course_id));
+    r.addEventListener("click", () => (e.course ? openCourse(e.course.course_id) : openGrade(e.grade)));
     return r;
   }));
-  if (!list.length) box.append(el("div", "row empty-row", data.courses.length ? "Keine Kurse in diesem Semester." : "Noch keine Kurse. Verbinde deinen Stundenplan unter Einstellungen."));
+  if (!list.length) box.append(el("div", "row empty-row", entries.length ? "Keine Kurse in diesem Semester" : "Noch keine Kurse"));
 }
 
 async function openCourse(id) {
   const data = state.coursesData || await loadCourses().catch(() => null);
   const c = data?.courses.find((x) => x.course_id === id);
   if (!c) return;
-  const info = el("div", "group");
-  if (c.nr) info.append(row("LVA-Nummer", c.nr));
-  if (c.kinds) info.append(row("Art", c.kinds));
-  info.append(row("Semester", c.semesters.join(", ") || "–"), row("Termine", String(c.events)));
-  if (c.first_start) info.append(row("Zeitraum", `${fmtDate.format(new Date(c.first_start))} – ${fmtDate.format(new Date(c.last_end))}`));
-
-  const grade = matchGrade(c);
-  if (grade) info.append(row("Note", grade.grade_text || String(grade.grade ?? "")));
-
-  const att = el("div", "group");
-  const r = el("label", "row");
-  r.append(el("span", "", "Anwesenheitspflicht"), makeSwitch(c.attendance, async (v) => {
-    await put(`/api/courses/${encodeURIComponent(c.course_id)}/attendance`, { attendance: v });
-    c.attendance = v;
-    if (state.tab === "courses") renderCourses(); else renderTab(state.tab);
-  }));
-  att.append(r);
-
-  const upcoming = el("div", "group");
-  upcoming.append(el("div", "row empty-row", "Lade Termine …"));
-  openSheet(c.title, info, el("h3", "section-header", "Zusatzfunktion"), att,
-    el("p", "footnote", "Gilt für alle Termine des Kurses. Einzelne Termine änderst du im Kalender."),
-    el("h3", "section-header", "Nächste Termine"), upcoming);
-
-  const from = new Date(), to = c.last_end ? new Date(c.last_end) : addDays(from, 120);
-  try {
-    const evs = to > from ? (await fetchEvents(from, to)).filter((e) => e.course_id === id).slice(0, 8) : [];
-    upcoming.replaceChildren(...evs.map((e) => {
-      const rr = row(inDays(new Date(e.start)), `${fmtTime.format(new Date(e.start))} · ${e.location || "Ort unbekannt"}`, "nowrap-label tap");
-      rr.addEventListener("click", () => openEvent(e));
-      if (e.status === "cancelled") rr.classList.add("cancelled");
-      return rr;
+  const kind = (c.kinds || "").split(",")[0] || null;
+  pushPage(c.title, (body) => {
+    const head = el("div", "page-head");
+    head.append(titleWithKind(kind, c.title, "h1"));
+    if (c.lecturer) head.append(el("p", "", c.lecturer));
+    body.append(head);
+    const grade = matchGrade(c);
+    body.append(group(
+      c.nr ? row("LVA-Nummer", c.nr) : null,
+      row("Semester", c.semesters.join(", ") || "–"),
+      c.first_start ? row("Zeitraum", `${fmtShort.format(new Date(c.first_start))} – ${fmtDate.format(new Date(c.last_end))}`) : null,
+      grade ? row("Note", grade.grade_text || String(grade.grade ?? "")) : null,
+    ));
+    const r = el("label", "row");
+    r.append(el("span", "", "Anwesenheitspflicht"), makeSwitch(c.attendance, async (v) => {
+      await put(`/api/courses/${encodeURIComponent(c.course_id)}/attendance`, { attendance: v });
+      c.attendance = v;
     }));
-    if (!evs.length) upcoming.append(el("div", "row empty-row", "Keine weiteren Termine."));
-  } catch (err) { errorBox(upcoming, err); }
-}
-
-function normTitle(s) { return String(s || "").toLowerCase().replace(/[^a-z0-9äöüß]/g, ""); }
-function matchGrade(course) {
-  const grades = state.gradesData?.grades || [];
-  const nr = String(course.nr || "").replace(/\D/g, "");
-  return grades.find((g) => nr && String(g.nr || "").replace(/\D/g, "") === nr)
-    || grades.find((g) => normTitle(g.title) && normTitle(g.title) === normTitle(course.title));
+    body.append(header("Zusatzfunktion"), group(r), note("Gilt für alle Termine. Einzelne Termine änderst du im Termin selbst."));
+    const upcoming = group(el("div", "row empty-row", "Lade Termine …"));
+    body.append(header("Nächste Termine"), upcoming);
+    const from = new Date(), to = c.last_end ? new Date(c.last_end) : addDays(from, 120);
+    (to > from ? fetchEvents(from, to) : Promise.resolve([])).then((evs) => {
+      evs = evs.filter((e) => e.course_id === id).slice(0, 10);
+      upcoming.replaceChildren(...evs.map((e) => {
+        const s = new Date(e.start);
+        const r = row(`${inDays(s)}`, `${fmtTime.format(s)} · ${e.status === "cancelled" ? "Entfällt" : e.location || "Ort unbekannt"}`, "tap nowrap-label");
+        r.addEventListener("click", () => openEvent(e));
+        return r;
+      }));
+      if (!evs.length) upcoming.append(el("div", "row empty-row", "Keine weiteren Termine"));
+    }).catch((err) => errorBox(upcoming, err));
+  });
 }
 
 // ---------- Tab: Studium (Noten, ECTS, Statistik) ----------
-async function loadGrades() { state.gradesData = await api("/api/grades"); return state.gradesData; }
-
+function isPassed(g) { return g.passed !== false && g.grade !== 5; }
 function studyNumbers(grades, target) {
-  const passed = grades.filter((g) => g.passed !== false && g.grade !== 5);
+  const passed = grades.filter(isPassed);
   const ects = passed.reduce((s, g) => s + (+g.ects || 0), 0);
   const graded = passed.filter((g) => g.grade >= 1 && g.grade <= 4);
   const w = graded.reduce((s, g) => s + (+g.ects || 1), 0);
   const avg = w ? graded.reduce((s, g) => s + g.grade * (+g.ects || 1), 0) / w : null;
   const plain = graded.length ? graded.reduce((s, g) => s + g.grade, 0) / graded.length : null;
-  return { passed, ects, avg, plain, target, graded };
+  return { passed, ects, avg, plain, target };
+}
+function gradePill(g) {
+  const pill = el("span", "grade-pill");
+  if (g.grade) { pill.textContent = String(g.grade); if (g.grade === 5) pill.classList.add("fail"); }
+  else if (g.passed === false) { pill.textContent = "✕"; pill.classList.add("fail"); }
+  else { pill.textContent = "✓"; pill.classList.add("ok"); }
+  return pill;
 }
 
 async function renderStudy() {
   let data;
-  try { data = await loadGrades(); } catch (err) { $("#study-error").hidden = false; $("#study-error").textContent = err.message; return; }
+  try { data = await loadGrades(); } catch (err) { $("#study-cta").replaceChildren(el("div", "notice", err.message)); return; }
   const { programs } = data;
   if (state.program !== "all" && !programs.some((p) => String(p.id) === state.program)) state.program = "all";
 
@@ -671,168 +814,133 @@ async function renderStudy() {
 
   const prog = programs.find((p) => String(p.id) === state.program);
   const grades = data.grades.filter((g) => state.program === "all" || String(g.program_id) === state.program);
-  const target = prog ? prog.ects_target : (programs.length === 1 ? programs[0].ects_target : programs.reduce((s, p) => s + (p.ects_target || 0), 0)) || 180;
-  const n = studyNumbers(grades, target || 180);
-
+  const target = (prog ? prog.ects_target : programs.length === 1 ? programs[0].ects_target : programs.reduce((s, p) => s + (p.ects_target || 0), 0)) || 180;
+  const n = studyNumbers(grades, target);
   $("#study-sub").textContent = prog ? prog.name : programs.length === 1 ? programs[0].name : "Studienfortschritt";
-  const err = data.error && !data.grades.length ? data.error : "";
-  $("#study-error").hidden = !err; $("#study-error").textContent = err ? `Noten konnten nicht gelesen werden: ${err}` : "";
+
+  // Noch keine Noten geladen -> klarer Hinweis mit Knopf statt leerer Statistik
+  const cta = $("#study-cta"); cta.replaceChildren();
+  if (data.auto && !state.me.demo && (!data.synced || data.error) && !data.grades.length) {
+    const box = el("div", "notice");
+    box.append(el("strong", "", data.error ? "Noten konnten nicht gelesen werden" : "Noten noch nicht geladen"),
+      document.createTextNode(data.error || "Studo+ holt deine Noten und ECTS aus der KUSSS-Notenauskunft."));
+    const b = el("button", "pill-btn", "Aus KUSSS laden"); b.addEventListener("click", openGradesRefresh);
+    box.append(el("br"), b);
+    cta.append(box);
+  }
 
   // Fortschrittsring
   const pct = Math.min(1, n.ects / n.target);
-  const C = 2 * Math.PI * 45;
+  const C = 2 * Math.PI * 40;
   const ring = el("div", "ring");
-  ring.append(svg(`<circle class="track" cx="56" cy="56" r="45"/><circle class="val" cx="56" cy="56" r="45" stroke-dasharray="${C}" stroke-dashoffset="${C}"/>`));
-  ring.firstChild.setAttribute("viewBox", "0 0 112 112");
-  const lbl = el("div", "ring-label"); lbl.textContent = `${Math.round(pct * 100)} %`; ring.append(lbl);
+  const ringSvg = svg(`<circle class="track" cx="46" cy="46" r="40"/><circle class="val" cx="46" cy="46" r="40" stroke-dasharray="${C}" stroke-dashoffset="${C}"/>`);
+  ringSvg.setAttribute("viewBox", "0 0 92 92");
+  ring.append(ringSvg, el("div", "ring-label", `${Math.round(pct * 100)} %`));
   requestAnimationFrame(() => requestAnimationFrame(() => { const v = $(".val", ring); if (v) v.style.strokeDashoffset = String(C * (1 - pct)); }));
   const txt = el("div", "progress-text");
   txt.append(el("strong", "", `${fmtNum.format(n.ects)} von ${n.target} ECTS`),
-    el("span", "", n.ects >= n.target ? "Geschafft!" : `Noch ${fmtNum.format(Math.max(0, n.target - n.ects))} ECTS bis zum Abschluss`));
+    el("span", "", n.ects >= n.target ? "Geschafft!" : `Noch ${fmtNum.format(Math.max(0, n.target - n.ects))} ECTS`));
   $("#progress-card").replaceChildren(ring, txt);
 
   const sems = {};
   for (const g of n.passed) if (g.semester) sems[g.semester] = (sems[g.semester] || 0) + (+g.ects || 0);
   const semList = Object.entries(sems).sort((a, b) => semSort(a[0]) - semSort(b[0])).slice(-8);
   const perSem = semList.length ? n.ects / semList.length : 0;
-
   const stats = [
-    [n.avg ? fmtAvg.format(n.avg) : "–", "Notenschnitt (ECTS-gewichtet)"],
-    [String(n.passed.length), "Prüfungen bestanden"],
+    [n.avg ? fmtAvg.format(n.avg) : "–", "Notenschnitt"],
     [n.plain ? fmtAvg.format(n.plain) : "–", "Schnitt ungewichtet"],
+    [String(n.passed.length), "Prüfungen bestanden"],
     [perSem ? fmtNum.format(Math.round(perSem * 10) / 10) : "–", "ECTS pro Semester"],
   ];
   $("#study-stats").replaceChildren(...stats.map(([v, l]) => { const s = el("div", "stat"); s.append(el("div", "stat-value", v), el("div", "stat-label", l)); return s; }));
 
-  // ECTS pro Semester
   const chart = $("#ects-chart");
   chart.style.setProperty("--n", Math.max(4, semList.length));
   const maxE = Math.max(30, ...semList.map(([, v]) => v));
   chart.replaceChildren(...semList.map(([s, v]) => {
     const col = el("div", "col");
     const b = el("div", "bar bar-a"); b.style.height = `${(v / maxE) * 100}%`;
-    col.append(el("div", "val-lbl", fmtNum.format(v)), b, el("span", "lbl", s.replace(/^(WS|SS) (\d{2})(\d{2})(\/\d+)?$/, "$1 $3$4")));
+    col.append(el("div", "val-lbl", fmtNum.format(v)), b, el("span", "lbl", semShort(s)));
     return col;
   }));
-  if (!semList.length) chart.replaceChildren(el("div", "muted chart-empty", "Noch keine Daten"));
+  if (!semList.length) chart.replaceChildren(el("div", "chart-empty", "Noch keine Daten"));
 
-  // Notenverteilung
   const dist = [1, 2, 3, 4, 5].map((g) => grades.filter((x) => x.grade === g).length);
   const maxD = Math.max(1, ...dist);
   $("#grade-dist").replaceChildren(...dist.map((c, i) => {
     const col = el("div", `col g${i + 1}`);
-    const b = el("div", "bar"); b.style.height = `${(c / maxD) * 75}%`;
+    const b = el("div", "bar"); b.style.height = `${(c / maxD) * 72}%`;
     col.append(el("span", "", String(c)), b, el("strong", "", String(i + 1)));
     return col;
   }));
 
   $("#btn-grades-refresh").hidden = !data.auto || state.me.demo;
-  $("#grades-synced").textContent = data.synced ? `Noten aus KUSSS zuletzt ${ago(data.synced)} geladen.` : data.auto ? "Noten werden beim Login aus der KUSSS-Notenauskunft übernommen." : "";
+  $("#grades-synced").textContent = data.synced ? `Aus KUSSS geladen ${ago(data.synced)}.` : "";
 
-  // Notenliste nach Semester gruppiert
   const groups = {};
   for (const g of grades) (groups[g.semester || "Ohne Semester"] ??= []).push(g);
   const out = [];
   for (const [sem, list] of Object.entries(groups).sort((a, b) => semSort(b[0]) - semSort(a[0]))) {
-    const ects = list.filter((g) => g.passed !== false).reduce((s, g) => s + (+g.ects || 0), 0);
-    out.push(el("h2", "section-header", `${sem} · ${fmtNum.format(ects)} ECTS`));
-    const box = el("div", "group");
-    box.append(...list.map(gradeRow));
-    out.push(box);
-  }
-  if (!grades.length) {
-    out.push(el("h2", "section-header", "Noten"));
-    const box = el("div", "group"); box.append(el("div", "row empty-row", "Noch keine Noten.")); out.push(box);
+    const ects = list.filter(isPassed).reduce((s, g) => s + (+g.ects || 0), 0);
+    out.push(header(`${sem} · ${fmtNum.format(ects)} ECTS`), group(...list.map(gradeRow)));
   }
   $("#grade-list").replaceChildren(...out);
 }
-function semSort(s) { const m = /(WS|SS) (\d{4})/.exec(s || ""); return m ? +m[2] * 2 + (m[1] === "WS" ? 1 : 0) : -1; }
 
 function gradeRow(g) {
   const r = el("button", "row course-row");
-  const pill = el("span", "grade-pill");
-  if (g.grade) { pill.textContent = String(g.grade); pill.classList.add(`g${g.grade}`); }
-  else if (g.passed === false) { pill.textContent = "✕"; pill.classList.add("fail"); }
-  else { pill.textContent = "✓"; pill.classList.add("ok"); }
   const text = el("span", "course-text");
-  const t = el("span", "course-title", g.title);
-  if (g.kind) t.append(el("span", "kind", g.kind));
+  const t = titleWithKind(g.kind, g.title); t.className = "course-title";
   const prog = state.gradesData.programs.find((p) => p.id === g.program_id);
   text.append(t, el("span", "course-sub", [g.date ? fmtDate.format(new Date(g.date)) : null, g.ects ? `${fmtNum.format(g.ects)} ECTS` : null, prog?.name].filter(Boolean).join(" · ") || "–"));
-  r.append(pill, text, chev());
+  r.append(text, gradePill(g), chev());
   r.addEventListener("click", () => openGrade(g));
   return r;
 }
 
 function openGrade(g) {
   const { programs } = state.gradesData;
-  const info = el("div", "group");
-  info.append(row("Note", g.grade_text || (g.grade ? String(g.grade) : "–")));
-  if (g.date) info.append(row("Datum", fmtDate.format(new Date(g.date))));
-  if (g.ects) info.append(row("ECTS", fmtNum.format(g.ects)));
-  if (g.sws) info.append(row("SWS", fmtNum.format(g.sws)));
-  if (g.kind) info.append(row("Art", g.kind));
-  if (g.nr) info.append(row("LVA-Nummer", g.nr));
-  if (g.semester) info.append(row("Semester", g.semester));
-  info.append(row("Quelle", g.source === "manual" ? "Manuell eingetragen" : "KUSSS"));
-
-  const prog = el("div", "group");
-  const label = el("label", "row");
-  const sel = el("select");
-  sel.append(new Option("Keine", ""), ...programs.map((p) => new Option(p.name, String(p.id))));
-  sel.value = g.program_id ? String(g.program_id) : "";
-  sel.addEventListener("change", async () => {
-    try { state.gradesData = await put(`/api/grades/${g.id}`, { program_id: sel.value ? +sel.value : null }); g.program_id = sel.value ? +sel.value : null; renderStudy(); }
-    catch (err) { alert(err.message); }
-  });
-  label.append(el("span", "row-label", "Studienrichtung"), sel);
-  prog.append(label);
-  const parts = [info, el("h3", "section-header", "Zuordnung"), prog,
-    el("p", "footnote", programs.length ? "Bestimmt, zu welchem Studium die ECTS zählen." : "Lege unter Einstellungen › Persönliche Daten deine Studienrichtungen an.")];
-  if (g.source === "manual") {
-    const del = el("button", "row row-btn danger", "Note löschen");
-    del.addEventListener("click", async () => {
-      if (!confirm(`„${g.title}“ löschen?`)) return;
-      await api(`/api/grades/${g.id}`, { method: "DELETE" }); closeSheet(); renderStudy();
+  pushPage(g.title, (body) => {
+    const head = el("div", "page-head");
+    head.append(titleWithKind(g.kind, g.title, "h1"));
+    if (g.semester) head.append(el("p", "", g.semester));
+    body.append(head, group(
+      row("Note", g.grade_text || (g.grade ? String(g.grade) : "–")),
+      g.date ? row("Datum", fmtDate.format(new Date(g.date))) : null,
+      g.ects ? row("ECTS", fmtNum.format(g.ects)) : null,
+      g.sws ? row("SWS", fmtNum.format(g.sws)) : null,
+      g.nr ? row("LVA-Nummer", g.nr) : null,
+      row("Quelle", g.source === "manual" ? "Manuell eingetragen" : "KUSSS"),
+    ));
+    const label = el("label", "row");
+    const sel = el("select");
+    sel.append(new Option("Keine", ""), ...programs.map((p) => new Option(p.name, String(p.id))));
+    sel.value = g.program_id ? String(g.program_id) : "";
+    sel.addEventListener("change", async () => {
+      try { state.gradesData = await put(`/api/grades/${g.id}`, { program_id: sel.value ? +sel.value : null }); g.program_id = sel.value ? +sel.value : null; haptic(); }
+      catch (err) { alert(err.message); }
     });
-    const box = el("div", "group group-spaced"); box.append(del); parts.push(box);
-  }
-  openSheet(g.title, ...parts);
-}
-
-function formSheet(title, fields, submitLabel, onSubmit, note) {
-  const form = el("form", "group");
-  for (const f of fields) {
-    const l = el("label", "row");
-    let input;
-    if (f.options) { input = el("select"); input.append(...f.options.map(([v, t]) => new Option(t, v))); }
-    else { input = el("input"); input.type = f.type || "text"; if (f.placeholder) input.placeholder = f.placeholder; if (f.inputmode) input.inputMode = f.inputmode; }
-    input.name = f.name; if (f.required) input.required = true; if (f.value !== undefined) input.value = f.value;
-    if (f.autocomplete) input.autocomplete = f.autocomplete;
-    l.append(el("span", "row-label", f.label), input);
-    form.append(l);
-  }
-  const btn = el("button", "row row-btn", submitLabel); btn.type = "submit";
-  form.append(btn);
-  const errP = el("p", "error");
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault(); errP.textContent = ""; btn.disabled = true;
-    const old = btn.textContent; btn.textContent = "Bitte warten …";
-    try { await onSubmit(Object.fromEntries(new FormData(form))); closeSheet(); }
-    catch (err) { errP.textContent = err.message; }
-    finally { btn.disabled = false; btn.textContent = old; }
+    label.append(el("span", "row-label", "Studium"), sel);
+    body.append(header("Zuordnung"), group(label),
+      note(programs.length ? "Bestimmt, zu welchem Studium die ECTS zählen." : "Studienrichtungen legst du unter Einstellungen › Persönliche Daten an."));
+    if (g.source === "manual") {
+      const del = el("button", "row row-btn danger", "Note löschen");
+      del.addEventListener("click", async () => {
+        if (!confirm(`„${g.title}“ löschen?`)) return;
+        await api(`/api/grades/${g.id}`, { method: "DELETE" }); history.back();
+      });
+      body.append(el("div", "group-spaced"), group(del));
+    }
   });
-  openSheet(title, form, errP, ...(note ? [el("p", "footnote", note)] : []));
-  setTimeout(() => $("input", form)?.focus(), 350);
 }
 
 $("#btn-grade-add").addEventListener("click", () => {
   const programs = state.gradesData?.programs || [];
-  formSheet("Note hinzufügen", [
-    { name: "title", label: "Kurs", placeholder: "z. B. Analysis für Informatik", required: true },
+  formPage("Note hinzufügen", [
+    { name: "title", label: "Kurs", placeholder: "z. B. Analysis", required: true },
+    { name: "kind", label: "LVA-Art", options: [["", "–"], ...["VL", "UE", "KS", "KV", "PR", "SE", "PS", "IK", "VU"].map((k) => [k, k])] },
     { name: "grade", label: "Note", options: [["1", "1 – Sehr gut"], ["2", "2 – Gut"], ["3", "3 – Befriedigend"], ["4", "4 – Genügend"], ["5", "5 – Nicht genügend"], ["ok", "Mit Erfolg teilgenommen"]] },
     { name: "ects", label: "ECTS", placeholder: "6", inputmode: "decimal" },
-    { name: "kind", label: "Art", placeholder: "VL, UE, KV …" },
     { name: "date", label: "Datum", type: "date", value: new Date().toISOString().slice(0, 10) },
     ...(programs.length ? [{ name: "program_id", label: "Studium", options: [["", "Keine"], ...programs.map((p) => [String(p.id), p.name])], value: state.program !== "all" ? state.program : String(programs[0].id) }] : []),
   ], "Hinzufügen", async (v) => {
@@ -841,69 +949,38 @@ $("#btn-grade-add").addEventListener("click", () => {
       ects: v.ects ? +String(v.ects).replace(",", ".") : null, kind: v.kind || null, date: v.date || null,
       program_id: v.program_id ? +v.program_id : null,
     });
-    renderStudy();
   });
 });
 
-$("#btn-grades-refresh").addEventListener("click", () => {
-  formSheet("Noten aus KUSSS", [
+function openGradesRefresh() {
+  formPage("Noten aus KUSSS", [
     { name: "password", label: "JKU-Passwort", type: "password", required: true, autocomplete: "current-password", placeholder: "Passwort" },
   ], "Noten laden", async (v) => {
     state.gradesData = await post("/api/grades/refresh", { password: v.password });
-    renderStudy();
-  }, "Studo+ meldet sich einmal bei KUSSS an und liest die Notenauskunft. Das Passwort wird nicht gespeichert.");
-});
+    await loadMe();
+  }, "Studo+ meldet sich einmal bei KUSSS an und liest die Notenauskunft und deinen Namen. Das Passwort wird nicht gespeichert.");
+}
+$("#btn-grades-refresh").addEventListener("click", openGradesRefresh);
 
 // ---------- Tab: Einstellungen ----------
-function displayName(me) { return me.name || (me.uni.id === "jku" ? `Matrikelnr. ${me.matrikel}` : me.username); }
+function displayName(me) { return me.name || (me.uni.id === "jku" ? me.matrikel : me.username); }
 
 function renderSettings() {
   const me = state.me;
   setAvatar($("#set-avatar"), me.name);
   $("#set-name").textContent = displayName(me) + (me.demo ? " (Demo)" : "");
-  $("#set-sub").textContent = [me.name && me.matrikel ? me.matrikel : null, me.uni.name].filter(Boolean).join(" · ");
-  $("#set-status").textContent = me.connected ? (me.ical_source === "auto" ? "Automatisch verbunden" : "Verbunden") : "Nicht verbunden";
+  $("#set-sub").textContent = [me.name ? me.matrikel : null, me.uni.name].filter(Boolean).join(" · ");
+  $("#set-status").textContent = me.connected ? (me.ical_source === "auto" ? "Automatisch" : "Verbunden") : "Nicht verbunden";
   $("#set-sync").textContent = me.last_sync ? ago(me.last_sync) : "noch nie";
   $("#sync-error").textContent = me.last_sync_error || "";
-  $("#jku-connect").hidden = !me.uni.auto || me.demo;
-  $("#ical-hint").textContent = `${me.uni.ical_hint} Der Link bleibt auf dem Server und wird nur für deinen Stundenplan verwendet.`;
-  $$("input[name=marker]").forEach((r) => (r.checked = r.value === me.marker_style));
+  applyTheme();
 }
 
-$$("input[name=marker]").forEach((r) => r.addEventListener("change", async () => {
-  await put("/api/settings", { marker_style: r.value });
-  state.me.marker_style = r.value; haptic();
-}));
-
-$("#ical-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const btn = $("button", e.target);
-  btn.textContent = "Wird geprüft …";
-  try {
-    await put("/api/settings", { ical_url: new FormData(e.target).get("ical_url") });
-    e.target.reset(); $("#sync-error").textContent = "";
-    await loadMe(); renderSettings();
-  } catch (err) { $("#sync-error").textContent = err.message; }
-  btn.textContent = "Link speichern";
-});
-
-$("#jku-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const btn = $("button", e.target);
-  btn.textContent = "Verbinde mit KUSSS …"; btn.disabled = true;
-  try {
-    await post("/api/jku/connect", { password: new FormData(e.target).get("password") });
-    e.target.reset(); $("#sync-error").textContent = "";
-    await loadMe(); renderSettings();
-  } catch (err) { $("#sync-error").textContent = err.message; }
-  btn.textContent = "Kalender und Noten von KUSSS holen"; btn.disabled = false;
-});
-
 $("#btn-sync").addEventListener("click", async () => {
-  $("#btn-sync").textContent = "Synchronisiere …";
+  $("#btn-sync").textContent = "Wird aktualisiert …";
   try { await post("/api/sync"); $("#sync-error").textContent = ""; }
   catch (err) { $("#sync-error").textContent = err.message; }
-  $("#btn-sync").textContent = "Jetzt synchronisieren";
+  $("#btn-sync").textContent = "Jetzt aktualisieren";
   await loadMe(); renderSettings();
 });
 $("#btn-logout").addEventListener("click", async () => { await post("/api/logout").catch(() => {}); showLogin(); });
@@ -911,84 +988,178 @@ $("#btn-delete").addEventListener("click", async () => {
   if (!confirm("Konto mit allen Schaltern, Terminen und Noten endgültig löschen? Der Kalender-Abo-Link hört auf zu funktionieren.")) return;
   await api("/api/account", { method: "DELETE" }); showLogin();
 });
-$("#btn-copy-feed").addEventListener("click", async () => {
-  await navigator.clipboard.writeText(state.me.feed.https);
-  $("#btn-copy-feed").textContent = "Kopiert ✓"; haptic();
-  setTimeout(() => ($("#btn-copy-feed").textContent = "Abo-Link kopieren"), 1500);
-});
-$("#btn-rotate-feed").addEventListener("click", async () => {
-  if (!confirm("Neuen Abo-Link erzeugen? Bestehende Kalender-Abos hören auf zu aktualisieren.")) return;
-  state.me.feed = await post("/api/feed/rotate");
-  $("#subscribe").href = state.me.feed.webcal;
-});
 
-// ---------- Unterseite: Persönliche Daten + Studienrichtungen ----------
-async function renderProfile() {
-  const me = state.me, f = $("#profile-form");
-  f.elements.name.value = me.name || "";
-  f.elements.matrikel.value = me.matrikel || "";
-  $("#profile-uni").textContent = me.uni.name;
-  $("#profile-hint").hidden = !me.uni.auto;
-  let data;
-  try { data = await loadGrades(); } catch (err) { errorBox($("#program-list"), err, "Studienrichtungen"); return; }
-  renderPrograms(data.programs);
+// Verbindung zur Uni: KUSSS neu verbinden oder iCal-Link einfügen
+function openConnection() {
+  const me = state.me;
+  pushPage("Verbindung zur Uni", (body) => {
+    body.append(el("div", "page-head"));
+    $(".page-head", body).append(el("h1", "", "Verbindung zur Uni"), el("p", "", me.connected ? `Verbunden${me.last_sync ? `, aktualisiert ${ago(me.last_sync)}` : ""}` : "Noch nicht verbunden"));
+    if (me.uni.auto && !me.demo) {
+      const form = el("form");
+      const pw = el("input"); pw.type = "password"; pw.name = "password"; pw.required = true; pw.placeholder = "JKU-Passwort"; pw.autocomplete = "current-password"; pw.className = "field";
+      const btn = el("button", "row row-btn", "Kalender, Noten und Name holen"); btn.type = "submit";
+      const err = el("p", "error");
+      form.append(group(pw, btn), note("Studo+ meldet sich einmal bei KUSSS an. Das Passwort wird nicht gespeichert."), err);
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault(); btn.textContent = "Verbinde mit KUSSS …"; btn.disabled = true; err.textContent = "";
+        try { await post("/api/jku/connect", { password: pw.value }); await loadMe(); state.gradesData = null; history.back(); }
+        catch (x) { err.textContent = x.message; }
+        btn.textContent = "Kalender, Noten und Name holen"; btn.disabled = false;
+      });
+      body.append(header("KUSSS"), form);
+    }
+    const form = el("form");
+    const url = el("input"); url.type = "url"; url.name = "ical_url"; url.placeholder = "https://…"; url.autocomplete = "off"; url.className = "field";
+    const btn = el("button", "row row-btn", "Link speichern"); btn.type = "submit";
+    const err = el("p", "error");
+    form.append(group(url, btn), note(me.uni.ical_hint), err);
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault(); btn.textContent = "Wird geprüft …"; err.textContent = "";
+      try { await put("/api/settings", { ical_url: url.value }); await loadMe(); history.back(); }
+      catch (x) { err.textContent = x.message; }
+      btn.textContent = "Link speichern";
+    });
+    body.append(header("Kalender-Link (iCal)"), form);
+  });
 }
-function renderPrograms(programs) {
-  const box = $("#program-list");
-  box.replaceChildren(...programs.map((p) => {
-    const r = el("button", "row course-row");
-    const text = el("span", "course-text");
-    text.append(el("span", "course-title", p.name), el("span", "course-sub", [p.code, p.ects_target ? `${p.ects_target} ECTS` : null, p.source === "kusss" ? "aus KUSSS" : null].filter(Boolean).join(" · ") || "–"));
-    r.append(text, chev());
-    r.addEventListener("click", () => openProgram(p));
-    return r;
-  }));
-  if (!programs.length) box.append(el("div", "row empty-row", "Noch keine Studienrichtung."));
+
+// Apple Kalender: Abo, Markierung der Anwesenheitspflicht, Link
+function openAbo() {
+  pushPage("Apple Kalender", (body) => {
+    body.append(el("div", "page-head"));
+    $(".page-head", body).append(el("h1", "", "Apple Kalender"), el("p", "", "Dein Stundenplan als Kalender-Abo, aktualisiert sich von selbst."));
+    const sub = el("a", "btn-primary", "In Apple Kalender abonnieren");
+    sub.href = state.me.feed.webcal;
+    sub.style.textDecoration = "none"; sub.style.marginTop = "0";
+    body.append(sub);
+
+    const marker = el("div", "group");
+    for (const [v, label] of [["prefix", "„!“ vor dem Kursnamen"], ["emoji", "🔴 vor dem Kursnamen"], ["notes", "Nur in den Notizen"]]) {
+      const l = el("label", "row check-row");
+      const r = el("input"); r.type = "radio"; r.name = "marker"; r.value = v; r.checked = state.me.marker_style === v;
+      r.addEventListener("change", async () => { await put("/api/settings", { marker_style: v }); state.me.marker_style = v; haptic(); });
+      l.append(el("span", "", label), r, el("span", "check"));
+      marker.append(l);
+    }
+    body.append(header("Anwesenheitspflicht markieren"), marker);
+
+    const copy = el("button", "row row-btn", "Abo-Link kopieren");
+    copy.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(state.me.feed.https);
+      copy.textContent = "Kopiert ✓"; haptic(); setTimeout(() => (copy.textContent = "Abo-Link kopieren"), 1500);
+    });
+    const rotate = el("button", "row row-btn", "Abo-Link erneuern");
+    rotate.addEventListener("click", async () => {
+      if (!confirm("Neuen Abo-Link erzeugen? Bestehende Kalender-Abos hören auf zu aktualisieren.")) return;
+      state.me.feed = await post("/api/feed/rotate"); sub.href = state.me.feed.webcal;
+    });
+    body.append(header("Abo-Link"), group(copy, rotate), note("Erneuern macht den alten Link ungültig. Danach neu abonnieren."));
+  });
 }
+
+// ---------- Persönliche Daten + Studienrichtungen ----------
+const JKU_PROGRAMS = {
+  Bachelor: ["Artificial Intelligence", "Biologische Chemie", "Chemie", "Elektronik und Informationstechnik", "Humanmedizin", "Informatik",
+    "Kulturwissenschaften", "Kunststofftechnik", "Mechatronik", "Medizintechnik", "Sozialwirtschaft", "Soziologie",
+    "Statistik und Data Science", "Technische Mathematik", "Technische Physik", "Wirtschaftsinformatik", "Wirtschaftswissenschaften"],
+  Master: ["Artificial Intelligence", "Computer Science", "Mechatronik", "Wirtschaftsinformatik"],
+  Diplom: ["Rechtswissenschaften", "Wirtschaftsrecht"],
+};
+const ECTS_BY_TYPE = { Bachelor: 180, Master: 120, Diplom: 240 };
+
+function openProfile() {
+  pushPage("Persönliche Daten", (body, entry) => {
+    const me = state.me;
+    const head = el("div", "page-head profile-head");
+    const av = el("span", "avatar avatar-lg"); setAvatar(av, me.name);
+    head.append(av);
+    body.append(head);
+
+    const fromUni = me.name_source === "uni";
+    let nameRow;
+    if (fromUni || me.uni.auto) nameRow = row("Name", me.name || "wird beim nächsten KUSSS-Login übernommen");
+    else {
+      nameRow = el("label", "row");
+      const input = el("input"); input.value = me.name || ""; input.placeholder = "Vor- und Nachname"; input.autocomplete = "name";
+      input.addEventListener("change", async () => {
+        try { state.me = { ...state.me, ...(await put("/api/profile", { name: input.value })) }; setAvatar(av, state.me.name); haptic(); }
+        catch (err) { alert(err.message); }
+      });
+      nameRow.append(el("span", "row-label", "Name"), input);
+    }
+    body.append(group(nameRow, row(me.uni.id === "jku" ? "Matrikelnummer" : "Kennung", me.matrikel), row("Hochschule", me.uni.name)));
+    if (me.uni.auto) body.append(note(me.name ? "Name und Matrikelnummer kommen direkt aus KUSSS." : "Der Name kommt aus KUSSS. Unter Einstellungen › Verbindung zur Uni holst du ihn jetzt."));
+
+    const list = el("div", "group");
+    body.append(header("Studienrichtungen"), list);
+    const add = group(navRow("Studienrichtung hinzufügen", openProgramAdd));
+    add.classList.add("group-gap");
+    body.append(add, note("ECTS und Notenschnitt werden pro Studienrichtung berechnet."));
+    const fill = (programs) => {
+      list.replaceChildren(...programs.map((p) => {
+        const r = el("button", "row course-row");
+        const text = el("span", "course-text");
+        text.append(el("span", "course-title", p.name), el("span", "course-sub", [p.code, p.ects_target ? `${p.ects_target} ECTS` : null, p.source === "kusss" ? "aus KUSSS" : null].filter(Boolean).join(" · ") || "–"));
+        r.append(text, chev());
+        r.addEventListener("click", () => openProgram(p));
+        return r;
+      }));
+      if (!programs.length) list.append(el("div", "row empty-row", "Noch keine Studienrichtung"));
+    };
+    entry.refresh = () => fill(state.gradesData?.programs || []);
+    (state.gradesData ? Promise.resolve(state.gradesData) : loadGrades()).then((d) => fill(d.programs)).catch((err) => errorBox(list, err, "Studienrichtungen"));
+  });
+}
+
+function openProgramAdd() {
+  const isJku = state.me.uni.id === "jku";
+  const options = [["", "Bitte wählen"]];
+  if (isJku) for (const [type, names] of Object.entries(JKU_PROGRAMS)) for (const n of names) options.push([`${type}|${n}`, `${type} ${n}`]);
+  options.push(["other", "Anderes Studium …"]);
+  formPage("Studienrichtung", [
+    { name: "pick", label: "Studium", options, required: true, onChange: (sel, form) => {
+      const other = sel.value === "other";
+      form.elements.name.closest("label").hidden = !other;
+      form.elements.name.required = other;
+      const type = sel.value.split("|")[0];
+      if (ECTS_BY_TYPE[type]) form.elements.ects_target.value = ECTS_BY_TYPE[type];
+    } },
+    { name: "name", label: "Name", placeholder: "z. B. Bachelor Statistik", hidden: true },
+    { name: "ects_target", label: "ECTS-Ziel", value: 180, inputmode: "numeric" },
+    { name: "code", label: "Kennzahl", placeholder: "optional" },
+  ], "Hinzufügen", async (v) => {
+    const name = v.pick === "other" ? v.name : v.pick.replace("|", " ");
+    if (!name) throw new Error("Bitte ein Studium wählen.");
+    state.gradesData = await post("/api/programs", { name, code: v.code || null, ects_target: +v.ects_target || null });
+  });
+}
+
 function openProgram(p) {
-  formSheet(p.name, [
-    { name: "name", label: "Studium", value: p.name, required: true },
-    { name: "code", label: "Kennzahl", value: p.code || "" },
-    { name: "ects_target", label: "ECTS-Ziel", value: p.ects_target || "", inputmode: "numeric" },
-  ], "Speichern", async (v) => {
-    const d = await put(`/api/programs/${p.id}`, { name: v.name, code: v.code || null, ects_target: +v.ects_target || null });
-    state.gradesData = d; renderPrograms(d.programs);
+  pushPage(p.name, (body) => {
+    const head = el("div", "page-head"); head.append(el("h1", "", p.name)); body.append(head);
+    const ects = el("input"); ects.inputMode = "numeric"; ects.value = p.ects_target || ""; ects.placeholder = "180";
+    const code = el("input"); code.value = p.code || ""; code.placeholder = "optional";
+    const save = async () => {
+      try { state.gradesData = await put(`/api/programs/${p.id}`, { code: code.value || null, ects_target: +ects.value || null }); Object.assign(p, { code: code.value || null, ects_target: +ects.value || null }); haptic(); }
+      catch (err) { alert(err.message); }
+    };
+    ects.addEventListener("change", save); code.addEventListener("change", save);
+    const r1 = el("label", "row"); r1.append(el("span", "row-label", "ECTS-Ziel"), ects);
+    const r2 = el("label", "row"); r2.append(el("span", "row-label", "Kennzahl"), code);
+    const del = el("button", "row row-btn danger", "Studienrichtung entfernen");
+    del.addEventListener("click", async () => {
+      if (!confirm(`„${p.name}“ entfernen? Die Noten bleiben erhalten.`)) return;
+      state.gradesData = await api(`/api/programs/${p.id}`, { method: "DELETE" }); history.back();
+    });
+    body.append(group(r1, r2), el("div", "group-spaced"), group(del));
   });
-  const del = el("button", "row row-btn danger", "Studienrichtung entfernen");
-  del.addEventListener("click", async () => {
-    if (!confirm(`„${p.name}“ entfernen? Die Noten bleiben erhalten.`)) return;
-    const d = await api(`/api/programs/${p.id}`, { method: "DELETE" });
-    state.gradesData = d; renderPrograms(d.programs); closeSheet();
-  });
-  const box = el("div", "group group-spaced"); box.append(del);
-  $("#sheet-body").append(box);
 }
-
-$("#profile-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const v = Object.fromEntries(new FormData(e.target));
-  const btn = $("button[type=submit]", e.target);
-  try {
-    state.me = { ...state.me, ...(await put("/api/profile", { name: v.name, matrikel: v.matrikel })) };
-    setAvatar($("#avatar"), state.me.name); haptic();
-    btn.textContent = "Gespeichert ✓"; setTimeout(() => (btn.textContent = "Speichern"), 1500);
-  } catch (err) { alert(err.message); }
-});
-$("#program-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const v = Object.fromEntries(new FormData(e.target));
-  try {
-    const d = await post("/api/programs", { name: v.name, code: v.code || null, ects_target: +v.ects_target || null });
-    state.gradesData = d; renderPrograms(d.programs); e.target.reset(); haptic();
-  } catch (err) { alert(err.message); }
-});
 
 // ---------- Start ----------
 async function loadMe() {
   state.me = await api("/api/me");
   setAvatar($("#avatar"), state.me.name);
-  // webcal:// öffnet auf iOS direkt den Dialog "Kalenderabonnement hinzufügen"
-  $("#subscribe").href = state.me.feed.webcal;
 }
 
 async function boot() {
@@ -1001,14 +1172,14 @@ async function boot() {
   hideAll(); $("#app").hidden = false;
   try { const m = localStorage.getItem("studo_calmode"); if (["day", "week", "list"].includes(m)) state.cal.mode = m; } catch {}
   if (!state.unis.length) api("/api/unis").then((u) => (state.unis = u)).catch(() => {});
-  loadGrades().catch(() => {}); // für Noten in den Kursdetails
-  await loadCourses().catch(() => {}); // Kursfarben
+  loadGrades().catch(() => {});
+  loadCourses().catch(() => {});
   renderLinks();
-  switchTab("today");
+  switchTab("home");
   endSplash();
 }
 
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && state.me && !$("#app").hidden && $("#sheet").hidden) renderTab(state.tab);
+  if (!document.hidden && state.me && !$("#app").hidden && !stack.length) renderTab(state.tab);
 });
 boot();

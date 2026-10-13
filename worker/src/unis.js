@@ -131,7 +131,8 @@ export function normalizeUser(username, uni = null) {
 
 /** Matrikelnummer zur Anzeige (JKU ohne "k"). */
 export function matrikel(uni, username) {
-  return uni === "jku" ? String(username || "").replace(/^k/, "") : String(username || "");
+  // JKU: immer mit dem Buchstaben vorne, wie in KUSSS (K12345678)
+  return uni === "jku" ? `K${String(username || "").replace(/^k/i, "")}` : String(username || "");
 }
 
 export const USER_RE = /^[a-z0-9][a-z0-9._@+-]{1,63}$/;

@@ -17,9 +17,11 @@ test("Raum-Parser", () => {
 });
 
 test("Titel bereinigen", () => {
-  assert.deepEqual(cleanTitle("336.100 VL Analysis 1"), { title: "Analysis 1", kind: "VL", nr: "336.100" });
-  assert.deepEqual(cleanTitle("Analysis 1 / UE / 336.101"), { title: "Analysis 1", kind: "UE", nr: "336.101" });
-  assert.deepEqual(cleanTitle("Mathe"), { title: "Mathe", kind: null, nr: null });
+  assert.deepEqual(cleanTitle("336.100 VL Analysis 1"), { title: "Analysis 1", kind: "VL", nr: "336.100", lecturer: null });
+  assert.deepEqual(cleanTitle("Analysis 1 / UE / 336.101"), { title: "Analysis 1", kind: "UE", nr: "336.101", lecturer: null });
+  assert.deepEqual(cleanTitle("Mathe"), { title: "Mathe", kind: null, nr: null, lecturer: null });
+  assert.deepEqual(cleanTitle("KS Einführung in die Medienpsychologie / Andrea Wisenöcker / (232427/2026W)"),
+    { title: "Einführung in die Medienpsychologie", kind: "KS", nr: "232.427", lecturer: "Andrea Wisenöcker" });
 });
 
 test("Wiener Zeit inkl. Sommer-/Winterzeit", () => {
