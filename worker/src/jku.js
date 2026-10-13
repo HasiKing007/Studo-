@@ -86,6 +86,24 @@ function loginError(html) {
   return m ? decode(m[1].replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim() : null;
 }
 
+/** Kurzform einer URL für die Diagnose: ohne Query (SAMLRequest u. Ä.), nur "execution" bleibt. */
+function shortUrl(url) {
+  const u = new URL(url);
+  const exec = u.searchParams.get("execution");
+  return `${u.hostname.replace(/^www\./, "")}${u.pathname}${exec ? `?execution=${exec}` : ""}`;
+}
+
+/** Seite für die Diagnose beschreiben: Titel, Formulare mit Feldnamen (nie Werte). */
+export function describePage(page) {
+  const title = (page.html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "").replace(/\s+/g, " ").trim();
+  const forms = parseForms(page.html).map((f) =>
+    `Formular ${f.method.toUpperCase()} ${f.action ? shortUrl(new URL(f.action, page.url).toString()) : "(gleiche Seite)"}` +
+    ` [${[...f.fields.map((x) => `${x.name}:${x.type}`), ...f.buttons.map((b) => `Knopf ${b.name || b.label}`)].join(", ")}]`);
+  const err = loginError(page.html);
+  return [`${page.status} ${shortUrl(page.url)}`, title && `Titel „${title.slice(0, 80)}“`, err && `Meldung „${err.slice(0, 120)}“`,
+    ...forms, !forms.length && `keine Formulare, ${page.html.length} Zeichen`].filter(Boolean).join("; ");
+}
+
 const CAL_LINK = /(?:https?|webcal):\/\/[^\s"'<>]*?(?:published-calendar|ical|calendar)[^\s"'<>]*?token=[^\s"'<>]+/i;
 
 /** Abo-Link aus der Terminexport-Seite (falls schon angelegt). */
@@ -103,6 +121,7 @@ export class JkuSession {
     this.fetchImpl = fetchImpl;
     this.jar = new CookieJar();
     this.url = null;
+    this.trace = [];
   }
 
   async request(url, { method = "GET", body = null, referer = null } = {}) {
@@ -114,6 +133,7 @@ export class JkuSession {
       if (body) headers["Content-Type"] = "application/x-www-form-urlencoded";
       const doFetch = this.fetchImpl;
       const res = await doFetch(url, { method, headers, body, redirect: "manual" });
+      this.trace.push(`${method} ${shortUrl(url)} → ${res.status}`);
       const setCookies = res.headers.getSetCookie ? res.headers.getSetCookie() : [];
       this.jar.store(url, setCookies);
       const loc = res.headers.get("Location");
@@ -194,7 +214,13 @@ export class JkuSession {
       break;
     }
     if (sentCredentials && /logout/i.test(page.html)) return { status: "ok" };
-    return { status: "unavailable", message: "Der JKU-Login hat sich unerwartet verhalten. Bitte den Kalender-Link manuell einfügen." };
+    const detail = describePage(page);
+    console.warn("JKU-Login unerwartet:", detail, "| Verlauf:", this.trace.join(" | "));
+    return {
+      status: "unavailable",
+      message: `Der JKU-Login hat sich unerwartet verhalten. Bitte den Kalender-Link manuell einfügen. ` +
+        `Diagnose: ${detail}. Verlauf: ${this.trace.slice(-8).join(" | ")}`,
+    };
   }
 
   /** Persönlichen Abo-Link holen; legt ihn über "Create" an, falls es noch keinen gibt. */

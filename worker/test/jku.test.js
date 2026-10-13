@@ -125,3 +125,16 @@ test("JKU-Login: globales fetch wird ohne falsches this aufgerufen", async () =>
     assert.equal(r.status, "ok");
   } finally { globalThis.fetch = orig; }
 });
+
+test("JKU-Login: unbekannte Seite liefert Diagnose ohne Geheimnisse", async () => {
+  const fetchImpl = async (url) => {
+    if (url.includes("login.action")) return new Response(null, { status: 302, headers: { Location: "https://shibboleth.im.jku.at/idp/x?SAMLRequest=GEHEIM&execution=e1s1" } });
+    return new Response('<title>Etwas Neues</title><form method="post"><input name="foo" value="WERT"><button name="weiter">Weiter</button></form>', { status: 200 });
+  };
+  const r = await jkuConnect("k12345678", "pw", fetchImpl);
+  assert.equal(r.status, "unavailable");
+  assert.match(r.message, /Etwas Neues/);
+  assert.match(r.message, /foo:text/);
+  assert.match(r.message, /execution=e1s1/);
+  assert.doesNotMatch(r.message, /GEHEIM|WERT|pw/);
+});
