@@ -1,0 +1,13 @@
+{
+  "name": "studo-plus-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --var DEMO:1",
+    "deploy": "wrangler deploy",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "wrangler": "4.150.0"
+  }
+}

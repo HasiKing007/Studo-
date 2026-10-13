@@ -4,7 +4,14 @@ Persönliche JKU-Organizer-App: Stundenplan aus KUSSS, Anwesenheitspflicht-Schal
 
 Architektur, Sicherheitskonzept und Entwicklungsplan: [docs/ARCHITEKTUR.md](docs/ARCHITEKTUR.md)
 
-Online stellen und aufs iPhone holen: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+Online stellen (kostenlos, Cloudflare) und aufs iPhone holen: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+
+## Zwei Backends
+
+- `worker/` (JavaScript, Cloudflare Workers): **die Online-Version**. Läuft kostenlos und immer erreichbar.
+- `backend/` (Python, FastAPI): zum lokalen Entwickeln und für den optionalen KUSSS-Login per Headless-Browser.
+
+Beide liefern dasselbe `frontend/` aus und haben dieselbe API.
 
 ## Schnellstart (Demo, ohne JKU-Zugang)
 
