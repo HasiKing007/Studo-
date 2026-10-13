@@ -1,0 +1,34 @@
+name: Probe KUSSS login (temporary)
+on:
+  push:
+    branches: [probe/kusss-login]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: pip install requests beautifulsoup4
+      - shell: python
+        run: |
+          import requests, re
+          from bs4 import BeautifulSoup
+          s = requests.Session(); s.headers["User-Agent"] = "Mozilla/5.0 StudoPlusProbe"
+          def show(r, label):
+              print(f"\n===== {label}: {r.status_code} {r.url}")
+              for h in r.history: print("   redirect:", h.status_code, h.url, "->", h.headers.get("Location"))
+              soup = BeautifulSoup(r.text, "html.parser")
+              print("   title:", soup.title.string if soup.title else None)
+              for f in soup.find_all("form"):
+                  print("   FORM", f.get("method"), f.get("action"), f.get("id"))
+                  for i in f.find_all(["input", "button", "select"]):
+                      print("      ", i.name, i.get("type"), i.get("name"), i.get("id"), (i.get("value") or "")[:40])
+              for a in soup.find_all("a"):
+                  t = (a.get_text() or "").strip()
+                  if re.search(r"login|anmeld|export|kalender|ical|sso", (t + (a.get("href") or "")), re.I):
+                      print("   LINK", repr(t[:40]), a.get("href"))
+              return soup
+          r = s.get("https://www.kusss.jku.at/kusss/index.action"); show(r, "index")
+          for path in ["login.action", "sso-login.action", "studentwelcome.action"]:
+              try:
+                  r = s.get("https://www.kusss.jku.at/kusss/" + path, timeout=20); show(r, path)
+              except Exception as e: print(path, e)
+          print("\ncookies:", [c.name + "@" + c.domain for c in s.cookies])
