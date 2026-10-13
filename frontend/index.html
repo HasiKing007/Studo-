@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Studo+</title>
+  <meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+  <!-- iOS: als App vom Home-Bildschirm starten -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Studo+">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" href="/icons/favicon-32.png">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <!-- Login -->
+  <section id="login" class="screen" hidden>
+    <div class="login-box">
+      <h1 class="brand brand-lg">Studo<sup>+</sup></h1>
+      <p class="muted">Melde dich mit deinem JKU-Account an.</p>
+      <form id="login-form" class="group" autocomplete="on">
+        <label class="row"><span>Benutzer</span>
+          <input name="username" autocomplete="username" autocapitalize="none" placeholder="k12345678" required></label>
+        <label class="row"><span>Passwort</span>
+          <input name="password" type="password" autocomplete="current-password" required></label>
+        <label class="row"><span>Für Hintergrund-Sync merken</span>
+          <input name="remember_for_sync" type="checkbox" class="switch" switch></label>
+      </form>
+      <p class="hint">Das Passwort wird nur verschlüsselt gespeichert, wenn du „merken“ aktivierst.
+        Für den Stundenplan reicht meist der KUSSS-Kalenderlink.</p>
+      <button form="login-form" class="btn-primary" type="submit">Anmelden</button>
+      <p id="login-error" class="error" role="alert"></p>
+    </div>
+  </section>
+
+  <!-- App -->
+  <div id="app" hidden>
+    <header class="appbar">
+      <h1 class="brand">Studo<sup>+</sup></h1>
+      <div class="appbar-meta"><span id="me-name"></span><span id="me-status">JKU Linz</span></div>
+    </header>
+
+    <main>
+      <section id="tab-today" class="tab">
+        <h2 class="section-title">Stundenplan</h2>
+        <div id="today-list" class="list"></div>
+        <h2 class="section-title">Schnellzugriffe</h2>
+        <div id="quick-links" class="links"></div>
+      </section>
+
+      <section id="tab-calendar" class="tab" hidden>
+        <a id="subscribe" class="banner" href="#">In Apple Kalender abonnieren</a>
+        <div class="week-nav">
+          <button id="week-prev" class="icon-btn" aria-label="Vorige Woche">‹</button>
+          <span id="week-label"></span>
+          <button id="week-next" class="icon-btn" aria-label="Nächste Woche">›</button>
+        </div>
+        <div id="week-strip" class="week-strip"></div>
+        <div id="calendar-list" class="list"></div>
+      </section>
+
+      <section id="tab-settings" class="tab" hidden>
+        <h2 class="section-title">Account</h2>
+        <div class="group">
+          <div class="row"><span>JKU-Account</span><span id="set-user" class="muted"></span></div>
+          <div class="row"><span>Letzte Synchronisierung</span><span id="set-sync" class="muted"></span></div>
+          <button id="btn-sync" class="row row-btn">Jetzt synchronisieren</button>
+          <button id="btn-logout" class="row row-btn">Abmelden</button>
+          <button id="btn-disconnect" class="row row-btn danger">Verbindung trennen</button>
+        </div>
+        <p id="sync-error" class="error"></p>
+
+        <h2 class="section-title">KUSSS-Kalender</h2>
+        <form id="ical-form" class="group">
+          <label class="row row-stack"><span>Privater iCal-Link aus KUSSS</span>
+            <input name="ical_url" type="url" placeholder="https://www.kusss.jku.at/…" autocomplete="off"></label>
+          <button class="row row-btn" type="submit">Link speichern</button>
+        </form>
+        <p class="hint">KUSSS → Mein Kalender → Kalender exportieren. Der Link wird verschlüsselt gespeichert.</p>
+
+        <h2 class="section-title">Apple Kalender</h2>
+        <div class="group" id="marker-group">
+          <label class="row"><span>„!“ vor dem Kursnamen</span><input type="radio" name="marker" value="prefix"></label>
+          <label class="row"><span>🔴 vor dem Kursnamen</span><input type="radio" name="marker" value="emoji"></label>
+          <label class="row"><span>Nur in den Notizen</span><input type="radio" name="marker" value="notes"></label>
+        </div>
+        <div class="group">
+          <button id="btn-copy-feed" class="row row-btn">Abo-Link kopieren</button>
+          <button id="btn-rotate-feed" class="row row-btn danger">Abo-Link erneuern</button>
+        </div>
+        <p class="hint">Erneuern macht den alten Link ungültig. Danach in Apple Kalender neu abonnieren.</p>
+      </section>
+    </main>
+
+    <nav class="tabbar">
+      <button data-tab="today" class="active"><svg viewBox="0 0 24 24"><path d="M4 11.5 12 5l8 6.5V20h-5v-5H9v5H4z"/></svg>Heute</button>
+      <button data-tab="calendar"><svg viewBox="0 0 24 24"><rect x="4" y="5.5" width="16" height="14.5" rx="2.5"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4"/></svg>Kalender</button>
+      <button data-tab="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>Einstellungen</button>
+    </nav>
+  </div>
+
+  <template id="event-tpl">
+    <article class="card">
+      <div class="card-main">
+        <div class="card-time"></div>
+        <div class="card-title"></div>
+        <div class="card-loc"></div>
+      </div>
+      <label class="card-toggle"><span>Anwesenheitspflicht</span>
+        <input type="checkbox" class="switch" switch></label>
+      <div class="card-detail" hidden>
+        <span class="muted">Nur dieser Termin</span>
+        <div class="segmented">
+          <button data-v="inherit">Wie Kurs</button><button data-v="1">Ja</button><button data-v="0">Nein</button>
+        </div>
+      </div>
+    </article>
+  </template>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
