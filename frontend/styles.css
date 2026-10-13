@@ -1,6 +1,7 @@
 /* Studo+ – ruhiges iOS-Design: System-Schrift, gruppierte Listen, feine Trenner,
    ein einziger Akzent (Orange), grüne iOS-Schalter. Hell ist Standard, Dunkel optional. */
 :root {
+  --switch-off: rgba(120, 120, 128, .16);
   --accent: #D35400;
   --accent-soft: rgba(211, 84, 0, .12);
   --green: #34C759;
@@ -28,7 +29,7 @@
   --red: #FF453A;
   --bg: #000000;
   --card: #1C1C1E;
-  --fill: #39393D;
+  --fill: #39393D; --switch-off: rgba(120, 120, 128, .32);
   --fill-2: #2C2C2E;
   --text: #F2F2F7;
   --muted: #8D8D93;
@@ -42,7 +43,7 @@
 @media (prefers-color-scheme: dark) {
   :root[data-theme="auto"] {
     --accent: #F0701A; --accent-soft: rgba(240, 112, 26, .18); --green: #30D158; --red: #FF453A;
-    --bg: #000000; --card: #1C1C1E; --fill: #39393D; --fill-2: #2C2C2E; --text: #F2F2F7; --muted: #8D8D93;
+    --switch-off: rgba(120, 120, 128, .32); --bg: #000000; --card: #1C1C1E; --fill: #39393D; --fill-2: #2C2C2E; --text: #F2F2F7; --muted: #8D8D93;
     --placeholder: #5A5A5F; --sep: #38383A; --card-border: transparent; --bar-bg: rgba(22, 22, 24, .8); --shadow: none;
     color-scheme: dark;
   }
@@ -163,21 +164,31 @@ button.row:active, label.check-row:active, .row.tap:active { background: var(--f
 .kind { display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: .02em; color: var(--accent); background: var(--accent-soft);
   padding: 1px 5px; border-radius: 5px; margin-right: 6px; vertical-align: 1px; line-height: 1.35; }
 
-/* ---------- iOS-Schalter ----------
-   Safari ab 17.4 rendert <input switch> nativ (inkl. Haptik am iPhone) – dort nur die Farbe.
-   Sonst Nachbau mit Originalmaßen (51×31, Daumen 27); animiert wird nur transform und Farbe. */
-input.switch { accent-color: var(--green); width: 51px; height: 31px; margin: 0; flex: none; cursor: pointer; }
-.no-native-switch input.switch {
-  appearance: none; -webkit-appearance: none; position: relative; border-radius: 16px;
-  background: var(--fill); transition: background-color .3s ease; outline: none;
+/* ---------- Schalter im Liquid-Glass-Stil (iOS 26) ----------
+   Längliche Bahn, Daumen als Kapsel. Beim Drücken wird der Daumen größer und zu durchsichtigem Glas
+   mit Lichtkante, beim Loslassen federt er an die neue Stelle. Animiert werden nur transform und Farben. */
+input.switch {
+  appearance: none; -webkit-appearance: none; position: relative; flex: none; margin: 0; cursor: pointer; outline: none;
+  width: 64px; height: 28px; border-radius: 14px; background: var(--switch-off); transition: background-color .3s ease;
+  -webkit-tap-highlight-color: transparent; touch-action: manipulation;
 }
-.no-native-switch input.switch::before {
-  content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%;
-  background: #fff; transform: translateX(0); will-change: transform; transition: transform .35s var(--spring);
-  box-shadow: 0 3px 8px rgba(0, 0, 0, .15), 0 3px 1px rgba(0, 0, 0, .06);
+input.switch::before {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 38px; height: 24px; border-radius: 12px;
+  background: #fff; will-change: transform;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, .06), 0 3px 8px rgba(0, 0, 0, .14);
+  transition: transform .45s var(--spring), background-color .25s ease, box-shadow .25s ease;
 }
-.no-native-switch input.switch:checked { background: var(--green); }
-.no-native-switch input.switch:checked::before { transform: translateX(20px); }
+input.switch:checked { background: var(--green); }
+input.switch:checked::before { transform: translateX(22px); }
+input.switch:active::before {
+  background: rgba(255, 255, 255, .28);
+  box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .9), inset 0 1px 2px rgba(255, 255, 255, .8),
+    inset 0 -2px 4px rgba(0, 0, 0, .08), 0 4px 14px rgba(0, 0, 0, .18);
+  -webkit-backdrop-filter: blur(1px) saturate(160%); backdrop-filter: blur(1px) saturate(160%);
+  transform: scale(1.32, 1.42);
+}
+input.switch:checked:active::before { transform: translateX(22px) scale(1.32, 1.42); }
+input.switch:disabled { opacity: .5; cursor: default; }
 
 /* ---------- Segmente, Chips, Buttons ---------- */
 .segmented { position: relative; display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; background: var(--fill); border-radius: 9px; padding: 2px; }
@@ -285,8 +296,10 @@ input.switch { accent-color: var(--green); width: 51px; height: 31px; margin: 0;
 .block.cancelled { opacity: .45; text-decoration: line-through; }
 .block .must { position: absolute; top: 3px; right: 3px; width: 15px; height: 15px; font-size: 10px; }
 .week .block { padding: 2px 3px; font-size: 10.5px; border-left-width: 2px; }
-.week .block b { white-space: normal; overflow-wrap: anywhere; hyphens: auto; }
-.week .block span:not(.kind):not(.must) { display: none; }
+.week .block { padding: 3px 4px; }
+.week .block b { white-space: nowrap; overflow: hidden; text-overflow: clip; font-size: 11.5px; }
+.week .block .kind { display: block; margin: 0 0 1px; font-size: 9.5px; line-height: 1.2; }
+.week .block span.room { display: block; color: var(--muted); text-overflow: clip; font-size: 10px; line-height: 1.25; white-space: normal; overflow-wrap: anywhere; }
 .day-head { font-size: 13px; font-weight: 400; color: var(--muted); text-transform: uppercase; margin: 20px 16px 6px; }
 .day-head:first-child { margin-top: 4px; }
 .grid-empty { position: absolute; top: 120px; left: 0; right: 0; text-align: center; color: var(--muted); font-size: 14px; }
@@ -427,4 +440,11 @@ html, body { overscroll-behavior-x: none; }
 .chart .col.current .bar-a { background: color-mix(in srgb, var(--accent) 40%, var(--card)); min-height: 3px; }
 .chart .col.current .lbl { color: var(--accent); font-weight: 600; }
 /* Beim Wischen zwischen Tabs/Tagen soll der Inhalt nicht über die Ränder hinaus sichtbar sein */
-#app main, #tab-calendar { overflow-x: clip; }
+#tab-calendar { overflow-x: clip; }
+/* Profilbild auf Home: auf Höhe der Begrüßung statt mittig zum ganzen Block */
+#tab-home .title-row { align-items: flex-start; }
+#tab-home .title-row .avatar { margin-top: -1px; }
+button, a, label, input, select { touch-action: manipulation; }
+/* Keine Scrollleisten-Anzeige in Unterseiten und im Kalender */
+.page, .cal-view { scrollbar-width: none; }
+.page::-webkit-scrollbar, .cal-view::-webkit-scrollbar { display: none; }
