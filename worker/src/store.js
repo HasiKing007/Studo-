@@ -99,7 +99,13 @@ export class StudoStore extends DurableObject {
         throw e;
       }
     }
-    const stats = await this.apply(events);
+    let stats;
+    try { stats = await this.apply(events); } catch (e) {
+      console.warn("Abgleich fehlgeschlagen:", e.stack || e.message);
+      this.setSetting("last_sync_error", `Termine konnten nicht übernommen werden: ${e.message}`);
+      this.track("sync_error");
+      throw e;
+    }
     this.track("sync", { events: stats.total });
     return stats;
   }
