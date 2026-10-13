@@ -4,6 +4,8 @@ Persönliche JKU-Organizer-App: Stundenplan aus KUSSS, Anwesenheitspflicht-Schal
 
 Architektur, Sicherheitskonzept und Entwicklungsplan: [docs/ARCHITEKTUR.md](docs/ARCHITEKTUR.md)
 
+Online stellen und aufs iPhone holen: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+
 ## Schnellstart (Demo, ohne JKU-Zugang)
 
 ```bash

@@ -6,12 +6,16 @@ Ablauf:
    - scrypt-Hash des Passworts wird gespeichert (für spätere lokale Logins),
    - optional ("Für automatischen Sync merken") das Passwort Fernet-verschlüsselt,
    - ein gefundener iCal-Link wird verschlüsselt gespeichert.
+   Ohne Playwright (z. B. im schlanken Server-Image) wird nicht bei der JKU geprüft:
+   Der allererste Login richtet die Instanz ein und legt das App-Passwort fest.
+   Deshalb nach dem Deployment sofort selbst anmelden.
 2. Spätere Logins prüfen lokal gegen den Hash -> kein Request an die JKU nötig.
 3. Die App-Session ist ein zufälliges Token in einem HttpOnly/Secure/SameSite-Cookie;
    in der DB liegt nur sein SHA-256.
 
 Die App ist für genau einen Nutzer (dich) gedacht. Ein zweiter JKU-Account wird abgelehnt.
 """
+import importlib.util
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException, Request, Response
@@ -19,6 +23,11 @@ from fastapi import HTTPException, Request, Response
 from . import config, crypto, db
 
 _failed: dict[str, list[datetime]] = {}
+
+
+def kusss_login_available() -> bool:
+    """True, wenn Playwright installiert ist und der JKU-Login geprüft werden kann."""
+    return importlib.util.find_spec("playwright") is not None
 
 
 def _rate_limit(key: str) -> None:
@@ -43,6 +52,13 @@ async def login(username: str, password: str, remember_for_sync: bool, client_ip
         verified = True
     elif config.DEMO:
         verified = True
+    elif not owner and not kusss_login_available():
+        # Ohne Headless-Browser kann das Passwort nicht bei der JKU geprüft werden.
+        # Dann gilt: Der erste Login richtet die Instanz ein und legt das App-Passwort fest.
+        verified = True
+    elif not kusss_login_available():
+        _failed.setdefault(client_ip, []).append(datetime.now(timezone.utc))
+        raise HTTPException(401, "Falsches Passwort.")
     else:
         # Erster Login oder Passwort an der JKU geändert -> gegen die JKU prüfen
         from .jku import kusss_login

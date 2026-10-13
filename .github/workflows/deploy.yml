@@ -1,0 +1,51 @@
+name: Test & Deploy
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pytest
+      - run: python -m pytest -q
+        working-directory: backend
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency: deploy
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Hinweis, falls Fly.io noch nicht verbunden ist
+        if: env.FLY_API_TOKEN == ''
+        run: echo "::notice::Kein FLY_API_TOKEN-Secret gesetzt, Deployment übersprungen (siehe docs/DEPLOYMENT.md)."
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+        if: env.FLY_API_TOKEN != ''
+      - name: Einmalige Einrichtung (App, Speicher, Master-Key)
+        if: env.FLY_API_TOKEN != ''
+        run: |
+          APP=$(sed -n 's/^app = "\(.*\)"/\1/p' fly.toml)
+          flyctl status -a "$APP" >/dev/null 2>&1 || flyctl apps create "$APP" --org personal
+          flyctl volumes list -a "$APP" | grep -q studo_data \
+            || flyctl volumes create studo_data -a "$APP" --region fra --size 1 --yes
+          # Der Master-Key wird hier zufällig erzeugt und direkt als Fly-Secret gespeichert.
+          # Er taucht nirgends im Log oder im Repo auf.
+          if ! flyctl secrets list -a "$APP" | grep -q STUDO_MASTER_KEY; then
+            KEY=$(python3 -c "import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())")
+            echo "::add-mask::$KEY"
+            flyctl secrets set -a "$APP" --stage STUDO_MASTER_KEY="$KEY"
+          fi
+      - name: Deployment
+        if: env.FLY_API_TOKEN != ''
+        run: flyctl deploy --remote-only

@@ -1,0 +1,10 @@
+.git
+.github
+.venv
+data
+*.db
+__pycache__
+.pytest_cache
+docs
+logo-original.jpg
+.env
