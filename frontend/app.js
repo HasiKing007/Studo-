@@ -45,7 +45,6 @@ $("#login-form").addEventListener("submit", async (e) => {
   try {
     await api("/api/login", { method: "POST", body: JSON.stringify({
       username: f.get("username"), password: f.get("password"),
-      remember_for_sync: f.get("remember_for_sync") === "on",
     }) });
     e.target.reset();
     await boot();

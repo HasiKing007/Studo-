@@ -21,17 +21,15 @@
   <section id="login" class="screen" hidden>
     <div class="login-box">
       <h1 class="brand brand-lg">Studo<sup>+</sup></h1>
-      <p class="muted">Melde dich mit deinem JKU-Account an.</p>
+      <p class="muted">Melde dich mit deiner JKU-Kennung an.</p>
       <form id="login-form" class="group" autocomplete="on">
         <label class="row"><span>Benutzer</span>
           <input name="username" autocomplete="username" autocapitalize="none" placeholder="k12345678" required></label>
         <label class="row"><span>Passwort</span>
           <input name="password" type="password" autocomplete="current-password" required></label>
-        <label class="row"><span>Für Hintergrund-Sync merken</span>
-          <input name="remember_for_sync" type="checkbox" class="switch" switch></label>
       </form>
-      <p class="hint">Das Passwort wird nur verschlüsselt gespeichert, wenn du „merken“ aktivierst.
-        Für den Stundenplan reicht meist der KUSSS-Kalenderlink.</p>
+      <p class="hint">Beim allerersten Login legst du hier dein Studo+-Passwort fest.
+        Dein JKU-Passwort wird nicht gebraucht: Der Stundenplan kommt über den KUSSS-Kalenderlink.</p>
       <button form="login-form" class="btn-primary" type="submit">Anmelden</button>
       <p id="login-error" class="error" role="alert"></p>
     </div>

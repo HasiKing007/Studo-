@@ -1,0 +1,52 @@
+name: Test & Deploy
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Worker-Tests (Kalender-Parser, Feed, Räume)
+        run: node --test
+        working-directory: worker
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pytest
+      - name: Python-Tests (lokale Variante)
+        run: python -m pytest -q
+        working-directory: backend
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency: deploy
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+      - name: Hinweis, falls Cloudflare noch nicht verbunden ist
+        if: env.CLOUDFLARE_API_TOKEN == '' || env.CLOUDFLARE_ACCOUNT_ID == ''
+        run: echo "::notice::Cloudflare-Secrets fehlen, Deployment übersprungen (siehe docs/DEPLOYMENT.md)."
+      - uses: actions/setup-node@v4
+        if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        with:
+          node-version: "22"
+      - name: Deployment auf Cloudflare Workers
+        if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        run: |
+          npm ci
+          npx wrangler deploy
