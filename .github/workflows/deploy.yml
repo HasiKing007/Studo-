@@ -33,7 +33,7 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      STUDO_ADMINS: ${{ secrets.STUDO_ADMINS }}
+      STUDO_ADMIN_PASSWORD: ${{ secrets.STUDO_ADMIN_PASSWORD }}
     defaults:
       run:
         working-directory: worker
@@ -50,9 +50,9 @@ jobs:
         if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
         run: |
           npm ci
-          if [ -n "$STUDO_ADMINS" ]; then
-            npx wrangler deploy --var "ADMIN_USERS:$STUDO_ADMINS"
+          npx wrangler deploy
+          if [ -n "$STUDO_ADMIN_PASSWORD" ]; then
+            printf '%s' "$STUDO_ADMIN_PASSWORD" | npx wrangler secret put ADMIN_PASSWORD
           else
-            echo "::notice::Secret STUDO_ADMINS fehlt, Admin-Bereich bleibt gesperrt."
-            npx wrangler deploy
+            echo "::notice::Secret STUDO_ADMIN_PASSWORD fehlt, Admin-Login bleibt gesperrt."
           fi

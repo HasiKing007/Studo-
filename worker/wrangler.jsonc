@@ -26,10 +26,8 @@
     { "tag": "v2", "new_sqlite_classes": ["Registry"] }
   ],
 
-  // Admin-Konten (z. B. "k12345678" für JKU oder "tuwien:e1234567"), kommagetrennt.
-  // Wird beim Deployment aus dem GitHub-Secret STUDO_ADMINS gesetzt, damit die
-  // Kennung nicht im öffentlichen Repo steht.
-  "vars": { "ADMIN_USERS": "" },
+  // Admin-Zugang: eigenes Konto "admin", Passwort als Secret ADMIN_PASSWORD
+  // (wird beim Deployment aus dem GitHub-Secret STUDO_ADMIN_PASSWORD gesetzt).
 
   "observability": { "enabled": true }
 }

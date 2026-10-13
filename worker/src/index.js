@@ -4,8 +4,8 @@
 // Alles andere sind die statischen PWA-Dateien aus ../frontend.
 
 import { SESSION_DAYS } from "./store.js";
-import { UNIS, USER_RE, adminSet, normalizeUser, publicUnis } from "./unis.js";
-import { error, json, parseSession, sessionCookie } from "./util.js";
+import { UNIS, USER_RE, normalizeUser, publicUnis } from "./unis.js";
+import { error, getCookie, json, parseSession, randomToken, sessionCookie, sha256, timingSafeEqual } from "./util.js";
 
 export { StudoStore } from "./store.js";
 export { Registry } from "./registry.js";
@@ -29,7 +29,7 @@ function storeById(env, hexId) {
 async function login(request, env) {
   const body = await request.json().catch(() => ({}));
   const uni = String(body.uni || "jku");
-  const username = normalizeUser(body.username);
+  const username = normalizeUser(body.username, uni);
   const password = String(body.password || "");
   if (!UNIS[uni]) return error(422, "Unbekannte Hochschule.");
   if (!USER_RE.test(username) || !password) return error(422, "Benutzername und Passwort angeben.");
@@ -50,7 +50,52 @@ async function login(request, env) {
   });
 }
 
+// ---------- Admin: eigenes Konto, unabhängig von den Studierenden-Konten ----------
+// Benutzername "admin" (oder ADMIN_USER), Passwort aus dem Secret ADMIN_PASSWORD.
+// Die Admin-Session ist ein signiertes Cookie (HMAC-SHA256), gültig 12 Stunden.
+
+const ADMIN_COOKIE = "studo_admin";
+const ADMIN_HOURS = 12;
+
+async function hmac(env, data) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(`studo-admin:${env.ADMIN_PASSWORD}`),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data));
+  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function adminSession(request, env) {
+  if (!env.ADMIN_PASSWORD) return false;
+  const raw = getCookie(request, ADMIN_COOKIE);
+  const m = raw && raw.match(/^(\d+)\.([A-Za-z0-9_-]+)\.([0-9a-f]{64})$/);
+  if (!m || +m[1] < Date.now()) return false;
+  return timingSafeEqual(await hmac(env, `${m[1]}.${m[2]}`), m[3]);
+}
+
+const adminCookie = (value, maxAge) =>
+  `${ADMIN_COOKIE}=${value}; Max-Age=${maxAge}; Path=/api/admin; HttpOnly; Secure; SameSite=Strict`;
+
+async function admin(request, env, pathname) {
+  const reg = registry(env);
+  if (pathname === "/api/admin/login" && request.method === "POST") {
+    if (!env.ADMIN_PASSWORD) return error(503, "Admin-Zugang ist nicht eingerichtet (Secret STUDO_ADMIN_PASSWORD fehlt).");
+    const ip = request.headers.get("CF-Connecting-IP") || "?";
+    if (await reg.isBlocked(ip)) return error(429, "Zu viele Fehlversuche. Bitte in 15 Minuten erneut probieren.");
+    const body = await request.json().catch(() => ({}));
+    const userOk = String(body.username || "").trim().toLowerCase() === String(env.ADMIN_USER || "admin").toLowerCase();
+    const pwOk = timingSafeEqual(await sha256(String(body.password || "")), await sha256(env.ADMIN_PASSWORD));
+    if (!userOk || !pwOk) { await reg.recordFailure(ip); return error(401, "Benutzername oder Passwort falsch."); }
+    const exp = Date.now() + ADMIN_HOURS * 3600_000, nonce = randomToken(12);
+    return json({ ok: true }, 200, { "Set-Cookie": adminCookie(`${exp}.${nonce}.${await hmac(env, `${exp}.${nonce}`)}`, ADMIN_HOURS * 3600) });
+  }
+  if (pathname === "/api/admin/logout" && request.method === "POST") return json({ ok: true }, 200, { "Set-Cookie": adminCookie("", 0) });
+  if (!(await adminSession(request, env))) return error(401, "Nicht als Admin angemeldet");
+  if (pathname === "/api/admin/overview" && request.method === "GET") return json(await reg.overview());
+  return error(404, "Unbekannter Endpunkt");
+}
+
 async function api(request, env, pathname) {
+  if (pathname.startsWith("/api/admin/")) return admin(request, env, pathname);
   if (pathname === "/api/unis" && request.method === "GET") return json(publicUnis());
   if (pathname === "/api/login" && request.method === "POST") return login(request, env);
 
@@ -63,14 +108,6 @@ async function api(request, env, pathname) {
     const out = new Response(res.body, res);
     out.headers.append("Set-Cookie", sessionCookie("", 0));
     return out;
-  }
-
-  if (pathname.startsWith("/api/admin/")) {
-    const who = await stub.whoami(session.token);
-    if (!who) return error(401, "Nicht angemeldet");
-    if (!adminSet(env).has(who.key)) return error(403, "Kein Admin-Zugang.");
-    if (pathname === "/api/admin/overview" && request.method === "GET") return json(await registry(env).overview());
-    return error(404, "Unbekannter Endpunkt");
   }
 
   return stub.fetch(request);

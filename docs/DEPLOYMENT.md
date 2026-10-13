@@ -13,13 +13,13 @@ Jedes Konto bekommt ein eigenes Durable Object (eigene Datenbank). Die Gratis-Gr
 5. **Beides in GitHub hinterlegen:** Repo `HasiKing007/Studo-` → *Settings* → *Secrets and variables* → *Actions* → *New repository secret*:
    - `CLOUDFLARE_API_TOKEN` = der Token aus Schritt 4
    - `CLOUDFLARE_ACCOUNT_ID` = die Account-ID aus Schritt 3
-   - `STUDO_ADMINS` = deine eigene Kennung, z. B. `k12345678` (mehrere kommagetrennt; für andere Unis mit Präfix, z. B. `tuwien:e1234567`). Wer hier steht, sieht in den Einstellungen die *Nutzungsübersicht*.
+   - `STUDO_ADMIN_PASSWORD` = ein langes, eigenes Passwort für das **Admin-Konto**. Das Admin-Konto ist getrennt von deinem Studierenden-Konto: Auf der Anmeldeseite unten *Admin-Anmeldung* wählen, Benutzer `admin`, dieses Passwort. Ohne das Secret bleibt der Admin-Login gesperrt.
 6. **Deployment starten:** PR mergen, oder Repo → *Actions* → *Test & Deploy* → *Run workflow* (Branch `main`).
 7. **Anmelden:** `https://studo-plus.<name>.workers.dev` öffnen, Hochschule wählen und mit dem Uni-Account anmelden. Den Link kannst du an andere Studierende weitergeben, jede:r bekommt ein eigenes Konto.
 
 ## Anmeldung und Stundenplan
 
-- **JKU:** Login mit k-Nummer und JKU-Passwort. Der Worker meldet sich damit über das JKU-Single-Sign-on bei KUSSS an, öffnet *Studierzimmer → Terminexport*, legt dort bei Bedarf über *Create* den Kalender-Abo-Link an und übernimmt ihn. Das Passwort wird nicht gespeichert, nur ein PBKDF2-Prüfwert, damit der Login auch klappt, wenn das JKU-SSO gerade nicht erreichbar ist.
+- **JKU:** Login mit Matrikelnummer (mit oder ohne „k“) und JKU-Passwort. Der Worker meldet sich damit über das JKU-Single-Sign-on bei KUSSS an, öffnet *Studierzimmer → Terminexport*, legt dort bei Bedarf über *Create* den Kalender-Abo-Link an und übernimmt ihn. Außerdem liest er den Namen und die *Notenauskunft* (Noten, ECTS, Studienrichtung) für den Tab *Studium*. Das Passwort wird nicht gespeichert, nur ein PBKDF2-Prüfwert, damit der Login auch klappt, wenn das JKU-SSO gerade nicht erreichbar ist.
 - **Andere Hochschulen:** Beim ersten Login wird ein eigenes Studo+-Passwort festgelegt. Danach unter *Einstellungen → Kalender-Link (iCal)* den persönlichen Kalender-Link aus dem Uni-System einfügen (CAMPUSonline, TISS, u:space usw. bieten so einen Link an).
 - Weitere Hochschulen: ein Eintrag in `worker/src/unis.js`.
 
@@ -50,6 +50,7 @@ npm test
 - Jedes Konto hat seine eigene Datenbank. Session-Cookie und Abo-Link enthalten die zufällige Objekt-ID plus ein geheimes Token, gespeichert wird davon nur der SHA-256-Hash bzw. das Token selbst.
 - Passwörter werden nie im Klartext gespeichert (PBKDF2-SHA256, 100.000 Runden, Salt). Rate-Limit: 5 Fehlversuche pro Konto und 10 pro IP in 15 Minuten.
 - Der Kalender-Link liegt in der Datenbank des Kontos, die nur der Worker lesen kann.
+- Das Admin-Konto meldet sich mit einem signierten Cookie an, das nur für `/api/admin` gilt und nach 12 Stunden abläuft.
 - Die Admin-Übersicht zeigt nur Kennungen und Nutzungszahlen (Logins, App-Öffnungen, Kalender-Abrufe), keine Termine und keine Links.
 - **DSGVO:** Sobald andere Studierende Studo+ nutzen, bist du für deren Daten verantwortlich (Kennung, Stundenplan). Sinnvoll: eine kurze Datenschutzerklärung in der App und nur Leute einladen, die du kennst. *Konto und Daten löschen* entfernt alles eines Kontos sofort.
 - Der Abo-Link enthält ein 192-Bit-Zufallstoken und kann in den Einstellungen jederzeit erneuert werden.
