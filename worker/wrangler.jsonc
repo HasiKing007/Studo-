@@ -13,12 +13,23 @@
     "run_worker_first": true
   },
 
-  // Ein Durable Object mit eingebauter SQLite-Datenbank speichert alles
-  // (Termine, Schalter, Einstellungen, Sessions). Im Gratis-Plan enthalten.
+  // Durable Objects mit eingebauter SQLite-Datenbank (im Gratis-Plan enthalten):
+  // STORE = eines pro Konto (Termine, Schalter, Sessions), REGISTRY = Nutzungszahlen + Rate-Limit.
   "durable_objects": {
-    "bindings": [{ "name": "STORE", "class_name": "StudoStore" }]
+    "bindings": [
+      { "name": "STORE", "class_name": "StudoStore" },
+      { "name": "REGISTRY", "class_name": "Registry" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["StudoStore"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["StudoStore"] },
+    { "tag": "v2", "new_sqlite_classes": ["Registry"] }
+  ],
+
+  // Admin-Konten (z. B. "k12345678" für JKU oder "tuwien:e1234567"), kommagetrennt.
+  // Wird beim Deployment aus dem GitHub-Secret STUDO_ADMINS gesetzt, damit die
+  // Kennung nicht im öffentlichen Repo steht.
+  "vars": { "ADMIN_USERS": "" },
 
   "observability": { "enabled": true }
 }

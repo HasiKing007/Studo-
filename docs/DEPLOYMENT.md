@@ -2,7 +2,7 @@
 
 Studo+ läuft als **Cloudflare Worker** im Gratis-Plan: immer erreichbar, mit HTTPS, ohne Kreditkarte. Die Daten (Termine, Schalter, Einstellungen) liegen in einer SQLite-Datenbank in einem Durable Object, das ebenfalls im Gratis-Plan enthalten ist. Alle 30 Minuten gleicht der Worker selbstständig mit KUSSS ab. Jeder Merge auf `main` deployt automatisch über GitHub Actions (`.github/workflows/deploy.yml`).
 
-Die Gratis-Grenzen (rund 100.000 Anfragen pro Tag) sind für eine Person um Größenordnungen mehr als genug.
+Jedes Konto bekommt ein eigenes Durable Object (eigene Datenbank). Die Gratis-Grenzen (rund 100.000 Anfragen pro Tag) reichen für einige hundert aktive Studierende.
 
 ## Einmalig (ca. 10 Minuten, alles im Browser)
 
@@ -13,13 +13,15 @@ Die Gratis-Grenzen (rund 100.000 Anfragen pro Tag) sind für eine Person um Grö
 5. **Beides in GitHub hinterlegen:** Repo `HasiKing007/Studo-` → *Settings* → *Secrets and variables* → *Actions* → *New repository secret*:
    - `CLOUDFLARE_API_TOKEN` = der Token aus Schritt 4
    - `CLOUDFLARE_ACCOUNT_ID` = die Account-ID aus Schritt 3
+   - `STUDO_ADMINS` = deine eigene Kennung, z. B. `k12345678` (mehrere kommagetrennt; für andere Unis mit Präfix, z. B. `tuwien:e1234567`). Wer hier steht, sieht in den Einstellungen die *Nutzungsübersicht*.
 6. **Deployment starten:** PR mergen, oder Repo → *Actions* → *Test & Deploy* → *Run workflow* (Branch `main`).
-7. **Sofort selbst anmelden:** `https://studo-plus.<name>.workers.dev` öffnen und mit deiner JKU-Kennung (z. B. `k12345678`) und einem frei gewählten Passwort anmelden. Der **erste Login richtet die App für dich ein**, danach kann sich niemand anderes mehr anmelden.
+7. **Anmelden:** `https://studo-plus.<name>.workers.dev` öffnen, Hochschule wählen und mit dem Uni-Account anmelden. Den Link kannst du an andere Studierende weitergeben, jede:r bekommt ein eigenes Konto.
 
-## Stundenplan verbinden
+## Anmeldung und Stundenplan
 
-1. In KUSSS den persönlichen Kalender-Export-Link kopieren (*Mein Kalender* → *Kalender exportieren/abonnieren*; den genauen Menüpfad bitte selbst prüfen).
-2. In Studo+ unter *Einstellungen → KUSSS-Kalender* einfügen und *Link speichern* tippen. Der erste Sync startet sofort.
+- **JKU:** Login mit k-Nummer und JKU-Passwort. Der Worker meldet sich damit über das JKU-Single-Sign-on bei KUSSS an, öffnet *Studierzimmer → Terminexport*, legt dort bei Bedarf über *Create* den Kalender-Abo-Link an und übernimmt ihn. Das Passwort wird nicht gespeichert, nur ein PBKDF2-Prüfwert, damit der Login auch klappt, wenn das JKU-SSO gerade nicht erreichbar ist.
+- **Andere Hochschulen:** Beim ersten Login wird ein eigenes Studo+-Passwort festgelegt. Danach unter *Einstellungen → Kalender-Link (iCal)* den persönlichen Kalender-Link aus dem Uni-System einfügen (CAMPUSonline, TISS, u:space usw. bieten so einen Link an).
+- Weitere Hochschulen: ein Eintrag in `worker/src/unis.js`.
 
 ## Aufs iPhone
 
@@ -40,10 +42,14 @@ npm test
 
 - Logs: Cloudflare-Dashboard → *Workers* → `studo-plus` → *Logs*.
 - Deployment rot mit Hinweis auf „workers.dev subdomain“: Schritt 2 nachholen.
-- Passwort vergessen: im Dashboard → `studo-plus` → *Settings* → den Worker löschen und neu deployen (*Run workflow*). Achtung: Dabei gehen die gespeicherten Schalter verloren, der Stundenplan wird neu geladen.
+- JKU-Login klappt nicht: Fehlermeldung in der App lesen. Wenn KUSSS/SSO sich geändert hat, steht die Ursache in den Logs (`jku.js`). Als Ausweichweg kann der Kalender-Link immer auch manuell eingefügt werden.
+- Passwort vergessen (nicht JKU): In der App *Konto und Daten löschen* geht nur angemeldet. Sonst im Cloudflare-Dashboard unter *Durable Objects* das Objekt löschen lassen oder das Konto neu unter einem anderen Namen anlegen.
 
-## Sicherheit
+## Sicherheit und Datenschutz
 
-- Der KUSSS-Kalenderlink liegt in der Datenbank des Durable Objects, die nur dein Worker lesen kann. Eine zusätzliche Verschlüsselung mit einem Schlüssel, der ebenfalls bei Cloudflare läge, würde praktisch nichts bringen und ist deshalb weggelassen.
-- Das App-Passwort wird mit PBKDF2-SHA256 (100.000 Runden, Salt) gehasht. Nach 5 Fehlversuchen ist das Login 15 Minuten gesperrt.
+- Jedes Konto hat seine eigene Datenbank. Session-Cookie und Abo-Link enthalten die zufällige Objekt-ID plus ein geheimes Token, gespeichert wird davon nur der SHA-256-Hash bzw. das Token selbst.
+- Passwörter werden nie im Klartext gespeichert (PBKDF2-SHA256, 100.000 Runden, Salt). Rate-Limit: 5 Fehlversuche pro Konto und 10 pro IP in 15 Minuten.
+- Der Kalender-Link liegt in der Datenbank des Kontos, die nur der Worker lesen kann.
+- Die Admin-Übersicht zeigt nur Kennungen und Nutzungszahlen (Logins, App-Öffnungen, Kalender-Abrufe), keine Termine und keine Links.
+- **DSGVO:** Sobald andere Studierende Studo+ nutzen, bist du für deren Daten verantwortlich (Kennung, Stundenplan). Sinnvoll: eine kurze Datenschutzerklärung in der App und nur Leute einladen, die du kennst. *Konto und Daten löschen* entfernt alles eines Kontos sofort.
 - Der Abo-Link enthält ein 192-Bit-Zufallstoken und kann in den Einstellungen jederzeit erneuert werden.

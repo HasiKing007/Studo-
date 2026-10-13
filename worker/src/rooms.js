@@ -23,7 +23,8 @@ export const BUILDINGS = {
 };
 
 const HS = /^\s*(HS|Hörsaal)\s*(\d+[A-Z]?)\s*$/i;
-const CODE = /^\s*([A-Za-z]{1,3}\d?)[\s\-_]*([0-9][0-9A-Za-z.\-]*)\s*$/;
+// "K 224B", "S3 055", "S2 Z74" (Raum darf mit Buchstaben beginnen, wenn ein Trenner dazwischen ist), "T911"
+const CODE = /^\s*([A-Za-z]{1,3}\d?)(?:[\s\-_]+([0-9A-Za-z][0-9A-Za-z.\-]*)|([0-9][0-9A-Za-z.\-]*))\s*$/;
 const ONLINE = /(online|zoom|teams|webex|digital)/i;
 
 /** @returns {[string|null, string|null]} [gebäude, raum] */
@@ -48,7 +49,7 @@ export function parseRoom(raw) {
   m = text.match(CODE);
   if (m) {
     const prefix = m[1].toUpperCase();
-    if (BUILDINGS[prefix]) return [BUILDINGS[prefix], `${prefix} ${m[2]}`];
+    if (BUILDINGS[prefix]) return [BUILDINGS[prefix], `${prefix} ${(m[2] || m[3]).toUpperCase()}`];
   }
   return [null, text];
 }

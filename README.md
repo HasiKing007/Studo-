@@ -1,6 +1,6 @@
 # Studo+
 
-Persönliche JKU-Organizer-App: Stundenplan aus KUSSS, Anwesenheitspflicht-Schalter, abonnierbarer Apple-Kalender, Schnellzugriffe, installierbar als iOS-PWA.
+Uni-Organizer-App: Stundenplan automatisch aus KUSSS (JKU) oder per iCal-Link (andere Hochschulen), Anwesenheitspflicht-Schalter, abonnierbarer Apple-Kalender, Schnellzugriffe, installierbar als iOS-PWA. Mehrere Nutzer:innen, jede:r mit eigenem Konto, plus Admin-Nutzungsübersicht.
 
 Architektur, Sicherheitskonzept und Entwicklungsplan: [docs/ARCHITEKTUR.md](docs/ARCHITEKTUR.md)
 
@@ -8,10 +8,8 @@ Online stellen (kostenlos, Cloudflare) und aufs iPhone holen: [docs/DEPLOYMENT.m
 
 ## Zwei Backends
 
-- `worker/` (JavaScript, Cloudflare Workers): **die Online-Version**. Läuft kostenlos und immer erreichbar.
-- `backend/` (Python, FastAPI): zum lokalen Entwickeln und für den optionalen KUSSS-Login per Headless-Browser.
-
-Beide liefern dasselbe `frontend/` aus und haben dieselbe API.
+- `worker/` (JavaScript, Cloudflare Workers): **die Online-Version** mit Mehrbenutzer-Login, JKU-SSO, mehreren Hochschulen und Admin-Übersicht. Läuft kostenlos und immer erreichbar.
+- `backend/` (Python, FastAPI): ältere Ein-Personen-Variante zum lokalen Ausprobieren. Sie kennt die neuen Endpunkte (Hochschulauswahl, Admin) nicht.
 
 ## Schnellstart (Demo, ohne JKU-Zugang)
 

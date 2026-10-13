@@ -1,24 +1,18 @@
-// Das "Gehirn" von Studo+: ein Durable Object mit eigener SQLite-Datenbank.
-// Es gibt genau eine Instanz ("main"), weil die App für genau einen Nutzer gedacht ist.
-// Ein Alarm stößt alle 30 Minuten den Abgleich mit KUSSS an, auch wenn niemand die App öffnet.
+// Ein Durable Object pro Konto ("<uni>:<benutzer>") mit eigener SQLite-Datenbank:
+// Termine, Schalter, Einstellungen, Sessions. Ein Alarm gleicht alle 30 Minuten mit dem
+// Uni-Kalender ab, auch wenn niemand die App öffnet. Nutzungszahlen gehen an die Registry.
 
 import { DurableObject } from "cloudflare:workers";
 import { buildCalendar, parseICS } from "./ical.js";
 import { formatRoom, parseRoom } from "./rooms.js";
 import { demoEvents } from "./demo.js";
+import { jkuConnect } from "./jku.js";
+import { UNIS, adminSet } from "./unis.js";
+import { error, hashPassword, json, parseSession, randomToken, sha256, timingSafeEqual, verifyPassword } from "./util.js";
 
 const SYNC_MINUTES = 30;
-const SESSION_DAYS = 30;
-const COOKIE = "studo_session";
-// PBKDF2-Runden für das App-Passwort. Zusammen mit dem Rate-Limit (5 Versuche / 15 min)
-// ausreichend für eine Ein-Personen-App und schnell genug für die Gratis-Limits.
-const PBKDF2_ITERATIONS = 100_000;
-
-const QUICK_LINKS = [
-  { id: "kusss", name: "KUSSS", url: "https://www.kusss.jku.at/kusss/index.action", icon: "grid" },
-  { id: "moodle", name: "Moodle", url: "https://moodle.jku.at/", icon: "book" },
-  { id: "mail", name: "JKU-Mail", url: "https://outlook.office.com/mail/", icon: "mail" },
-];
+export const SESSION_DAYS = 90;
+const ACCOUNT_FAIL_LIMIT = 5;
 
 const MARKERS = { prefix: "! ", emoji: "🔴 ", notes: "" };
 
@@ -43,65 +37,12 @@ FROM events e
 LEFT JOIN event_overrides o ON o.uid = e.uid
 LEFT JOIN course_settings cs ON cs.course_id = e.course_id`;
 
-// ---------- Hilfen ----------
-
-const enc = new TextEncoder();
-const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
-const fromHex = (h) => new Uint8Array(h.match(/../g).map((x) => parseInt(x, 16)));
-
-function randomToken(bytes = 32) {
-  const b = crypto.getRandomValues(new Uint8Array(bytes));
-  return btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-async function sha256(text) {
-  return hex(await crypto.subtle.digest("SHA-256", enc.encode(text)));
-}
-
-async function pbkdf2(password, salt, iterations) {
-  const key = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveBits"]);
-  return hex(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations }, key, 256));
-}
-
-async function hashPassword(password) {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  return `pbkdf2$${PBKDF2_ITERATIONS}$${hex(salt)}$${await pbkdf2(password, salt, PBKDF2_ITERATIONS)}`;
-}
-
-async function verifyPassword(password, stored) {
-  const [, iter, salt, dk] = stored.split("$");
-  const candidate = await pbkdf2(password, fromHex(salt), +iter);
-  return timingSafeEqual(candidate, dk);
-}
-
-function timingSafeEqual(a, b) {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
-
-const json = (data, status = 200, headers = {}) =>
-  new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json", ...headers } });
-const error = (status, detail) => json({ detail }, status);
-
-function getCookie(request, name) {
-  const m = (request.headers.get("Cookie") || "").match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
-  return m ? m[1] : null;
-}
-
-// ---------- Durable Object ----------
-
 export class StudoStore extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
-    this.failed = new Map();
-    ctx.blockConcurrencyWhile(async () => {
-      this.sql.exec(SCHEMA);
-      if (!this.getSetting("feed_token")) this.setSetting("feed_token", randomToken(24));
-      if ((await ctx.storage.getAlarm()) === null) await ctx.storage.setAlarm(Date.now() + 60_000);
-    });
+    this.failures = [];
+    ctx.blockConcurrencyWhile(async () => this.sql.exec(SCHEMA));
   }
 
   getSetting(key, fallback = null) {
@@ -113,9 +54,25 @@ export class StudoStore extends DurableObject {
     else this.sql.exec("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, String(value));
   }
 
+  get key() { return `${this.getSetting("uni")}:${this.getSetting("username")}`; }
+  get uni() { return UNIS[this.getSetting("uni")] || UNIS.other; }
+  get exists() { return !!this.getSetting("pw_hash"); }
+
+  /** Nutzungszahlen an die zentrale Registry melden (blockiert nie die Antwort). */
+  track(event, info = {}) {
+    if (!this.env.REGISTRY || !this.exists) return;
+    const stub = this.env.REGISTRY.get(this.env.REGISTRY.idFromName("global"));
+    this.ctx.waitUntil(stub.track(this.key, event, {
+      verified: this.getSetting("verified") === "1",
+      connected: !!this.getSetting("ical_url") || this.env.DEMO === "1",
+      ...info,
+    }).catch((e) => console.warn("Registry:", e.message)));
+  }
+
   // ---------- Hintergrund-Sync ----------
 
   async alarm() {
+    if (!this.exists) return; // gelöschtes oder nie angelegtes Konto: nicht weiterlaufen
     try { await this.sync(); } catch (e) { console.warn("Sync fehlgeschlagen:", e.message); }
     finally { await this.ctx.storage.setAlarm(Date.now() + SYNC_MINUTES * 60_000); }
   }
@@ -126,22 +83,29 @@ export class StudoStore extends DurableObject {
     if (!url && this.env.DEMO === "1") {
       events = demoEvents();
     } else if (!url) {
-      throw new Error("Kein Kalender verbunden. Hinterlege den KUSSS-iCal-Link in den Einstellungen.");
+      throw new Error("Noch kein Kalender verbunden. Den iCal-Link in den Einstellungen hinterlegen.");
     } else {
       try {
         const res = await fetch(url.trim().replace(/^webcal:\/\//i, "https://"), {
-          headers: { "User-Agent": "StudoPlus/0.1 (private use)" }, redirect: "follow",
+          headers: { "User-Agent": "StudoPlus/1.0" }, redirect: "follow",
         });
-        if (!res.ok) throw new Error(`KUSSS antwortet mit HTTP ${res.status}`);
+        if (!res.ok) throw new Error(`Der Uni-Server antwortet mit HTTP ${res.status}`);
         const text = await res.text();
         if (!text.slice(0, 2000).includes("BEGIN:VCALENDAR")) throw new Error("Antwort ist kein iCal. Ist der Link noch gültig?");
         events = parseICS(text);
       } catch (e) {
         this.setSetting("last_sync_error", e.message);
+        this.track("sync_error");
         throw e;
       }
     }
-    return this.apply(events);
+    const stats = await this.apply(events);
+    this.track("sync", { events: stats.total });
+    return stats;
+  }
+
+  room(raw) {
+    return this.uni.rooms === "jku" ? parseRoom(raw) : [null, raw ? raw.replace(/\\,/g, ",").trim() : null];
   }
 
   /** Abgleich mit Änderungserkennung (Fingerprint -> SEQUENCE+1) und Ausfall-Erkennung. */
@@ -152,7 +116,7 @@ export class StudoStore extends DurableObject {
     const seen = new Set();
 
     for (const e of events) {
-      const [building, room] = parseRoom(e.location);
+      const [building, room] = this.room(e.location);
       const fp = await sha256([e.title, e.kind, e.start.toISOString(), e.end.toISOString(), building, room, e.cancelled].join("|"));
       seen.add(e.uid);
       const row = this.sql.exec("SELECT fingerprint, sequence FROM events WHERE uid=?", e.uid).toArray()[0];
@@ -186,53 +150,85 @@ export class StudoStore extends DurableObject {
     return stats;
   }
 
-  // ---------- Auth ----------
+  // ---------- Auth (RPC aus dem Worker) ----------
 
-  rateLimit(ip) {
+  accountLocked() {
     const now = Date.now();
-    const recent = (this.failed.get(ip) || []).filter((t) => now - t < 15 * 60_000);
-    this.failed.set(ip, recent);
-    return recent.length >= 5;
+    this.failures = this.failures.filter((t) => now - t < 15 * 60_000);
+    return this.failures.length >= ACCOUNT_FAIL_LIMIT;
   }
 
-  async login(body, ip) {
-    if (this.rateLimit(ip)) return error(429, "Zu viele Fehlversuche. Bitte in 15 Minuten erneut probieren.");
-    const username = String(body.username || "").trim().toLowerCase();
-    const password = String(body.password || "");
-    if (username.length < 2 || !password) return error(422, "Benutzername und Passwort angeben.");
+  /**
+   * Anmeldung. JKU: Prüfung direkt gegen das JKU-SSO, dabei wird der KUSSS-Abo-Link geholt.
+   * Andere Unis (und JKU, falls das SSO gerade nicht mitspielt): eigenes Studo+-Passwort,
+   * das beim ersten Login festgelegt wird.
+   * @returns {{ok: true, token: string} | {ok: false, status: number, detail: string}}
+   */
+  async login({ uni, username, password }) {
+    if (this.accountLocked()) return { ok: false, status: 429, detail: "Zu viele Fehlversuche für dieses Konto. Bitte in 15 Minuten erneut probieren." };
+    const fail = (status, detail) => { this.failures.push(Date.now()); return { ok: false, status, detail }; };
+    const cfg = UNIS[uni];
+    const firstLogin = !this.exists;
+    let verified = false;
+    let notice = null;
 
-    const owner = this.getSetting("owner_username");
-    const hash = this.getSetting("owner_pw_hash");
-    const fail = (status, msg) => { this.failed.get(ip).push(Date.now()); return error(status, msg); };
-
-    if (owner && owner !== username) return fail(403, "Diese Instanz ist bereits mit einem anderen Account verknüpft.");
-    if (owner && hash && !(await verifyPassword(password, hash))) return fail(401, "Falsches Passwort.");
-    if (!owner) {
-      // Erster Login richtet die Instanz ein und legt das App-Passwort fest.
-      this.setSetting("owner_username", username);
-      this.setSetting("owner_pw_hash", await hashPassword(password));
+    if (cfg.auth === "jku" && this.env.DEMO !== "1") {
+      const r = await jkuConnect(username, password);
+      if (r.status === "invalid") return fail(401, `JKU-Login abgelehnt: ${r.message}`);
+      if (r.status === "ok") {
+        verified = true;
+        if (this.getSetting("verified") !== "1" && !firstLogin) {
+          // Erstmals echt bestätigt: ein evtl. vorher von jemand anderem angelegtes Konto übernehmen
+          this.sql.exec("DELETE FROM sessions");
+        }
+        if (r.icalUrl && (this.getSetting("ical_source") !== "manual" || !this.getSetting("ical_url"))) {
+          this.setSetting("ical_url", r.icalUrl);
+          this.setSetting("ical_source", "auto");
+        } else if (!r.icalUrl && !this.getSetting("ical_url")) {
+          notice = "Angemeldet, aber der KUSSS-Kalenderlink wurde nicht gefunden. Bitte in den Einstellungen manuell einfügen.";
+        }
+      } else {
+        notice = r.message;
+      }
     }
+
+    if (!verified) {
+      const hash = this.getSetting("pw_hash");
+      if (hash && !(await verifyPassword(password, hash))) return fail(401, "Falsches Passwort.");
+    }
+    if (verified || firstLogin) this.setSetting("pw_hash", await hashPassword(password));
+    if (firstLogin) {
+      this.setSetting("uni", uni);
+      this.setSetting("username", username);
+      this.setSetting("created_at", new Date().toISOString());
+      this.setSetting("feed_token", randomToken(24));
+    }
+    if (verified) this.setSetting("verified", "1");
+    this.setSetting("login_notice", notice);
 
     const token = randomToken();
     const expires = new Date(Date.now() + SESSION_DAYS * 86400_000).toISOString();
     this.sql.exec("INSERT INTO sessions(token_hash, expires_at) VALUES(?,?)", await sha256(token), expires);
     this.sql.exec("DELETE FROM sessions WHERE expires_at < ?", new Date().toISOString());
+    if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(Date.now() + SYNC_MINUTES * 60_000);
+    this.track("login", { uni, username });
     this.ctx.waitUntil(this.sync().catch(() => {}));
-    return json({ username }, 200, {
-      "Set-Cookie": `${COOKIE}=${token}; Max-Age=${SESSION_DAYS * 86400}; Path=/; HttpOnly; Secure; SameSite=Strict`,
-    });
+    return { ok: true, token, firstLogin };
   }
 
-  async currentUser(request) {
-    const token = getCookie(request, COOKIE);
-    if (!token) return null;
+  async sessionValid(token) {
+    if (!token || !this.exists) return false;
     const row = this.sql.exec("SELECT expires_at FROM sessions WHERE token_hash=?", await sha256(token)).toArray()[0];
-    if (!row || new Date(row.expires_at) < new Date()) return null;
-    return this.getSetting("owner_username") || "";
+    return !!row && new Date(row.expires_at) > new Date();
+  }
+
+  /** Für den Worker: zu welchem Konto gehört diese Session? */
+  async whoami(token) {
+    return (await this.sessionValid(token)) ? { key: this.key } : null;
   }
 
   feedUrls(origin) {
-    const https = `${origin}/cal/${this.getSetting("feed_token")}.ics`;
+    const https = `${origin}/cal/${this.ctx.id.toString()}/${this.getSetting("feed_token")}.ics`;
     return { https, webcal: https.replace(/^https?:\/\//, "webcal://") };
   }
 
@@ -244,7 +240,7 @@ export class StudoStore extends DurableObject {
     const marker = MARKERS[this.getSetting("marker_style", "prefix")] ?? MARKERS.prefix;
     const now = new Date();
 
-    return buildCalendar("JKU Stundenplan", rows.map((r) => {
+    return buildCalendar(`${this.uni.name} · Studo+`, rows.map((r) => {
       const mandatory = !!r.attendance;
       const cancelled = r.status === "cancelled";
       let summary = r.title + (r.kind ? ` (${r.kind})` : "");
@@ -252,7 +248,7 @@ export class StudoStore extends DurableObject {
       if (cancelled) summary = "Entfällt: " + summary;
       const notes = [];
       if (mandatory) notes.push("Anwesenheitspflicht");
-      if (r.room_raw && r.room_raw !== r.room) notes.push(`Ort laut KUSSS: ${r.room_raw}`);
+      if (r.room_raw && r.room_raw !== r.room) notes.push(`Ort laut Uni: ${r.room_raw}`);
       if (r.description) notes.push(r.description);
       return {
         uid: r.uid, summary, start: r.start, end: r.end, stamp: now, lastModified: r.updated_at,
@@ -270,47 +266,61 @@ export class StudoStore extends DurableObject {
     this.sql.exec(`UPDATE events SET sequence=sequence+1, updated_at=? WHERE ${where}`, new Date().toISOString(), arg);
   }
 
-  // ---------- Routing ----------
+  async deleteAccount() {
+    this.track("delete");
+    await this.ctx.storage.deleteAlarm();
+    await this.ctx.storage.deleteAll();
+    this.sql.exec(SCHEMA);
+  }
+
+  me(origin) {
+    const uniId = this.getSetting("uni");
+    return {
+      username: this.getSetting("username"),
+      uni: { id: uniId, name: this.uni.name, auto: this.uni.auth === "jku", ical_hint: this.uni.icalHint },
+      admin: adminSet(this.env).has(this.key),
+      verified: this.getSetting("verified") === "1",
+      demo: this.env.DEMO === "1",
+      connected: !!this.getSetting("ical_url") || this.env.DEMO === "1",
+      ical_source: this.getSetting("ical_source"),
+      notice: this.getSetting("login_notice"),
+      last_sync: this.getSetting("last_sync"),
+      last_sync_error: this.getSetting("last_sync_error"),
+      marker_style: this.getSetting("marker_style", "prefix"),
+      feed: this.feedUrls(origin),
+      links: this.uni.links,
+    };
+  }
+
+  // ---------- Routing (vom Worker weitergereicht, Session bereits zugeordnet) ----------
 
   async fetch(request) {
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method;
-    const ip = request.headers.get("CF-Connecting-IP") || "?";
 
     // Öffentlich: Abo-Feed (durch geheimes Token geschützt)
-    const feed = path.match(/^\/cal\/([A-Za-z0-9_-]+)\.ics$/);
+    const feed = path.match(/^\/cal\/[0-9a-f]{64}\/([A-Za-z0-9_-]+)\.ics$/);
     if (feed && method === "GET") {
-      if (!timingSafeEqual(feed[1], this.getSetting("feed_token") || "")) return new Response("Not found", { status: 404 });
+      const token = this.getSetting("feed_token");
+      if (!token || !timingSafeEqual(feed[1], token)) return new Response("Not found", { status: 404 });
+      this.track("feed");
       return new Response(this.buildFeed(), {
         headers: { "Content-Type": "text/calendar; charset=utf-8", "Cache-Control": "no-cache, max-age=0" },
       });
     }
 
-    if (path === "/api/login" && method === "POST") return this.login(await request.json().catch(() => ({})), ip);
+    const session = parseSession(request);
+    if (!(await this.sessionValid(session?.token))) return error(401, "Nicht angemeldet");
 
     if (path === "/api/logout" && method === "POST") {
-      const token = getCookie(request, COOKIE);
-      if (token) this.sql.exec("DELETE FROM sessions WHERE token_hash=?", await sha256(token));
-      return json({ ok: true }, 200, { "Set-Cookie": `${COOKIE}=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Strict` });
+      this.sql.exec("DELETE FROM sessions WHERE token_hash=?", await sha256(session.token));
+      return json({ ok: true });
     }
 
-    // Ab hier nur angemeldet
-    const user = await this.currentUser(request);
-    if (user === null) return error(401, "Nicht angemeldet");
-
     if (path === "/api/me" && method === "GET") {
-      return json({
-        username: user,
-        demo: this.env.DEMO === "1",
-        connected: !!this.getSetting("ical_url") || this.env.DEMO === "1",
-        sync_password_stored: false,
-        last_sync: this.getSetting("last_sync"),
-        last_sync_error: this.getSetting("last_sync_error"),
-        marker_style: this.getSetting("marker_style", "prefix"),
-        feed: this.feedUrls(url.origin),
-        links: QUICK_LINKS,
-      });
+      this.track("open");
+      return json(this.me(url.origin));
     }
 
     if (path === "/api/settings" && method === "PUT") {
@@ -318,16 +328,35 @@ export class StudoStore extends DurableObject {
       if (body.marker_style !== undefined && body.marker_style !== null) {
         if (!(body.marker_style in MARKERS)) return error(422, "Unbekannte Markierung.");
         this.setSetting("marker_style", body.marker_style);
+        this.touch("1=?", 1);
       }
       if (typeof body.ical_url === "string") {
         const link = body.ical_url.trim();
         if (link && !/^(https|webcal):\/\//i.test(link)) return error(422, "Bitte den vollständigen https:// oder webcal:// Link einfügen.");
         this.setSetting("ical_url", link || null);
+        this.setSetting("ical_source", link ? "manual" : null);
+        this.setSetting("login_notice", null);
         if (link) {
           try { await this.sync(); } catch (e) { return error(502, `Sync fehlgeschlagen: ${e.message}`); }
         }
       }
       return json({ ok: true });
+    }
+
+    // JKU: Abo-Link erneut automatisch holen (Passwort wird nur für diesen Vorgang verwendet)
+    if (path === "/api/jku/connect" && method === "POST") {
+      if (this.uni.auth !== "jku") return error(400, "Nur für die JKU verfügbar.");
+      if (this.accountLocked()) return error(429, "Zu viele Fehlversuche. Bitte in 15 Minuten erneut probieren.");
+      const { password } = await request.json().catch(() => ({}));
+      const r = await jkuConnect(this.getSetting("username"), String(password || ""));
+      if (r.status === "invalid") { this.failures.push(Date.now()); return error(401, `JKU-Login abgelehnt: ${r.message}`); }
+      if (r.status !== "ok") return error(502, r.message);
+      if (!r.icalUrl) return error(502, "Angemeldet, aber in KUSSS wurde kein Kalender-Abo-Link gefunden.");
+      this.setSetting("ical_url", r.icalUrl);
+      this.setSetting("ical_source", "auto");
+      this.setSetting("verified", "1");
+      this.setSetting("login_notice", null);
+      try { return json(await this.sync()); } catch (e) { return error(502, `Sync fehlgeschlagen: ${e.message}`); }
     }
 
     if (path === "/api/sync" && method === "POST") {
@@ -339,11 +368,9 @@ export class StudoStore extends DurableObject {
       return json(this.feedUrls(url.origin));
     }
 
-    if (path === "/api/disconnect" && method === "POST") {
-      for (const k of ["ical_url", "owner_username", "owner_pw_hash", "last_sync", "last_sync_error"]) this.setSetting(k, null);
-      this.setSetting("feed_token", randomToken(24)); // alter Abo-Link wird ungültig
-      this.sql.exec("DELETE FROM sessions");
-      return json({ ok: true }, 200, { "Set-Cookie": `${COOKIE}=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Strict` });
+    if (path === "/api/account" && method === "DELETE") {
+      await this.deleteAccount();
+      return json({ ok: true });
     }
 
     if (path === "/api/events" && method === "GET") {
@@ -357,6 +384,14 @@ export class StudoStore extends DurableObject {
         location: formatRoom(r.building, r.room), attendance: !!r.attendance,
         is_override: !!r.is_override, course_attendance: !!r.course_attendance,
       })));
+    }
+
+    if (path === "/api/courses" && method === "GET") {
+      const rows = this.sql.exec(`SELECT e.course_id, e.title, GROUP_CONCAT(DISTINCT e.kind) AS kinds, COUNT(*) AS n,
+          COALESCE(cs.attendance, 0) AS attendance
+        FROM events e LEFT JOIN course_settings cs ON cs.course_id = e.course_id
+        GROUP BY e.course_id ORDER BY e.title`).toArray();
+      return json(rows.map((r) => ({ course_id: r.course_id, title: r.title, kinds: r.kinds, events: r.n, attendance: !!r.attendance })));
     }
 
     const course = path.match(/^\/api\/courses\/(.+)\/attendance$/);

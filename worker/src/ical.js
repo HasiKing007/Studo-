@@ -136,7 +136,7 @@ export function buildCalendar(name, events) {
   const L = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//Studo+//JKU Stundenplan//DE",
+    "PRODID:-//Studo+//Stundenplan//DE",
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
     `X-WR-CALNAME:${escapeText(name)}`,
