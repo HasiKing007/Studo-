@@ -111,3 +111,17 @@ test("Formular-Parser und Cookies", () => {
   assert.equal(jar.header("https://a.jku.at/"), "s=1");
   assert.equal(findCalendarLink("nix"), null);
 });
+
+test("JKU-Login: globales fetch wird ohne falsches this aufgerufen", async () => {
+  const orig = globalThis.fetch;
+  const fake = fakeJku().fetchImpl;
+  // Wie in Cloudflare Workers: fetch wirft, wenn this nicht globalThis ist
+  globalThis.fetch = function (...args) {
+    if (this !== undefined && this !== globalThis) throw new TypeError("Illegal invocation");
+    return fake(...args);
+  };
+  try {
+    const r = await jkuConnect("k12345678", "richtig");
+    assert.equal(r.status, "ok");
+  } finally { globalThis.fetch = orig; }
+});
