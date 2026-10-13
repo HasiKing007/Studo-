@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CookieJar, findCalendarLink, jkuConnect, parseForms } from "../src/jku.js";
+import { CookieJar, decodeBody, findCalendarLink, jkuConnect, parseForms, parseGrade, parseGrades } from "../src/jku.js";
 
 // Nachgebauter Ablauf KUSSS -> Shibboleth -> KUSSS, wie er im Browser abläuft.
 function fakeJku({ password = "richtig", hasLink = false } = {}) {
@@ -152,4 +152,21 @@ test("JKU-Login: unbekannte Seite liefert Diagnose ohne Geheimnisse", async () =
   assert.match(r.message, /foo:text/);
   assert.match(r.message, /execution=e1s1/);
   assert.doesNotMatch(r.message, /GEHEIM|WERT|pw/);
+});
+
+test("Seiten in Windows-1252 werden mit richtigen Umlauten gelesen", () => {
+  const html = '<meta charset="ISO-8859-1"><td>Einf\xfchrung</td><td>nicht gen\xfcgend</td>';
+  const bytes = Uint8Array.from(html, (c) => c.charCodeAt(0));
+  assert.equal(decodeBody(bytes, "text/html"), html);
+  assert.equal(decodeBody(bytes, "text/html;charset=utf-8").includes("ü"), true); // ungültiges UTF-8 -> Fallback
+  assert.equal(decodeBody(new TextEncoder().encode("Prüfung"), "text/html; charset=UTF-8"), "Prüfung");
+});
+
+test("Noten werden auch mit kaputten Umlauten oder Entities erkannt", () => {
+  assert.deepEqual(parseGrade("nicht gen�gend"), { grade: 5, passed: false });
+  assert.deepEqual(parseGrade("genÃ¼gend"), { grade: 4, passed: true });
+  const { grades } = parseGrades("<table><tr><th>Datum</th><th>LVA</th><th>Note</th><th>ECTS</th></tr>" +
+    "<tr><td>01.02.2026</td><td>Einf&uuml;hrung in die Medienpsychologie</td><td>nicht gen&uuml;gend</td><td>3</td></tr></table>");
+  assert.equal(grades[0].title, "Einführung in die Medienpsychologie");
+  assert.equal(grades[0].grade, 5);
 });

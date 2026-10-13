@@ -47,7 +47,29 @@ export class CookieJar {
 
 // ---------- HTML ----------
 
+// Windows-1252 weicht nur bei 0x80–0x9F von Latin-1 ab
+const CP1252 = "€\u0081‚ƒ„…†‡ˆ‰Š‹Œ\u008DŽ\u008F\u0090‘’“”•–—˜™š›œ\u009Džÿ";
+/**
+ * Seiteninhalt mit dem richtigen Zeichensatz lesen. KUSSS liefert teils ISO-8859-1/Windows-1252;
+ * als UTF-8 gelesen würden daraus kaputte Umlaute (und "Nicht genügend" nicht mehr erkannt).
+ */
+export function decodeBody(bytes, contentType = "") {
+  const head = String.fromCharCode(...bytes.subarray(0, 2048));
+  const cs = (/charset\s*=\s*["']?([\w-]+)/i.exec(contentType || "") || /<meta[^>]+charset\s*=\s*["']?([\w-]+)/i.exec(head) || [])[1]?.toLowerCase();
+  const latin = () => { let out = ""; for (const b of bytes) out += b >= 0x80 && b <= 0x9f ? CP1252[b - 0x80] : String.fromCharCode(b); return out; };
+  if (cs && /^(iso-?8859-1|latin-?1|windows-1252|cp1252|us-ascii)$/.test(cs)) return latin();
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+  catch { return latin(); } // kein gültiges UTF-8 -> fast sicher Windows-1252
+}
+
+// Benannte Entities, die in KUSSS-Seiten vorkommen (Umlaute, ß, Leerzeichen …)
+const NAMED = {
+  auml: "ä", ouml: "ö", uuml: "ü", Auml: "Ä", Ouml: "Ö", Uuml: "Ü", szlig: "ß", nbsp: " ", ndash: "–", mdash: "—",
+  eacute: "é", egrave: "è", aacute: "á", agrave: "à", oacute: "ó", iacute: "í", uacute: "ú", ccedil: "ç", Eacute: "É",
+  bdquo: "„", ldquo: "“", rdquo: "”", lsquo: "‘", rsquo: "’", hellip: "…", middot: "·", euro: "€", sect: "§", deg: "°",
+};
 const decode = (s) => s
+  .replace(/&([a-zA-Z]+);/g, (m, n) => NAMED[n] ?? m)
   .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
   .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(+d))
   .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
@@ -114,7 +136,7 @@ export function extractName(html) {
 }
 
 const GRADE_WORDS = [
-  [/nicht\s+genügend/i, 5], [/sehr\s+gut/i, 1], [/befriedigend/i, 3], [/genügend/i, 4], [/\bgut\b/i, 2],
+  [/nicht\s+gen\S{1,2}gend/i, 5], [/sehr\s+gut/i, 1], [/befriedigend/i, 3], [/gen\S{1,2}gend/i, 4], [/\bgut\b/i, 2],
 ];
 
 /** Note aus KUSSS-Text: Zahl 1-5, Wort, oder Teilnahme-Beurteilung. */
@@ -224,7 +246,7 @@ export class JkuSession {
         continue;
       }
       this.url = url;
-      return { status: res.status, url, html: await res.text() };
+      return { status: res.status, url, html: decodeBody(new Uint8Array(await res.arrayBuffer()), res.headers.get("Content-Type")) };
     }
     throw new Error("Zu viele Weiterleitungen beim JKU-Login.");
   }

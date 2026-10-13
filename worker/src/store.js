@@ -6,7 +6,7 @@ import { DurableObject } from "cloudflare:workers";
 import { buildCalendar, parseICS } from "./ical.js";
 import { formatRoom, parseRoom } from "./rooms.js";
 import { demoEvents } from "./demo.js";
-import { jkuConnect } from "./jku.js";
+import { jkuConnect, parseGrade } from "./jku.js";
 import { UNIS, matrikel } from "./unis.js";
 import { error, hashPassword, json, parseSession, randomToken, sha256, timingSafeEqual, verifyPassword } from "./util.js";
 
@@ -256,7 +256,14 @@ export class StudoStore extends DurableObject {
 
   gradesPayload() {
     const grades = this.sql.exec("SELECT * FROM grades ORDER BY COALESCE(date, '') DESC, title").toArray()
-      .map((g) => ({ ...g, passed: g.passed === null ? null : !!g.passed }));
+      .map((g) => {
+        // Ältere Syncs haben "Nicht genügend" mit kaputten Umlauten nicht erkannt: Note aus dem Text neu lesen
+        if (g.source === "kusss" && g.grade === null && g.grade_text) {
+          const p = parseGrade(g.grade_text);
+          if (p.grade !== null || p.passed !== null) Object.assign(g, { grade: p.grade, passed: p.passed === null ? null : p.passed ? 1 : 0 });
+        }
+        return { ...g, passed: g.passed === null ? null : !!g.passed };
+      });
     const programs = this.sql.exec("SELECT * FROM programs ORDER BY id").toArray();
     return {
       grades, programs,
