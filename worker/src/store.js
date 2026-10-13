@@ -10,7 +10,12 @@ import { jkuConnect, parseGrade } from "./jku.js";
 import { UNIS, matrikel } from "./unis.js";
 import { error, hashPassword, json, parseSession, randomToken, sha256, timingSafeEqual, verifyPassword } from "./util.js";
 
-const SYNC_MINUTES = 30;
+// Tagsüber (6–22 Uhr Wien) alle 10 Minuten, nachts stündlich: Raumänderungen kommen so rasch an
+const SYNC_DAY_MINUTES = 10, SYNC_NIGHT_MINUTES = 60;
+function nextSyncDelay(now = new Date()) {
+  const h = +new Intl.DateTimeFormat("de-AT", { hour: "numeric", hour12: false, timeZone: "Europe/Vienna" }).format(now);
+  return (h >= 6 && h < 22 ? SYNC_DAY_MINUTES : SYNC_NIGHT_MINUTES) * 60_000;
+}
 export const SESSION_DAYS = 90;
 const ACCOUNT_FAIL_LIMIT = 5;
 
@@ -44,7 +49,7 @@ CREATE TABLE IF NOT EXISTS grades (
 `;
 
 const EFFECTIVE = `
-SELECT e.*, COALESCE(o.attendance, cs.attendance, 0) AS attendance,
+SELECT e.*, COALESCE(o.attendance, cs.attendance, 0) AS attendance, cs.short AS short,
        o.attendance IS NOT NULL AS is_override, COALESCE(cs.attendance, 0) AS course_attendance
 FROM events e
 LEFT JOIN event_overrides o ON o.uid = e.uid
@@ -75,6 +80,7 @@ export class StudoStore extends DurableObject {
     ctx.blockConcurrencyWhile(async () => {
       this.sql.exec(SCHEMA);
       try { this.sql.exec("ALTER TABLE courses ADD COLUMN lecturer TEXT"); } catch { /* Spalte gibt es schon */ }
+      try { this.sql.exec("ALTER TABLE course_settings ADD COLUMN short TEXT"); } catch { /* Spalte gibt es schon */ }
     });
   }
 
@@ -107,7 +113,7 @@ export class StudoStore extends DurableObject {
   async alarm() {
     if (!this.exists) return; // gelöschtes oder nie angelegtes Konto: nicht weiterlaufen
     try { await this.sync(); } catch (e) { console.warn("Sync fehlgeschlagen:", e.message); }
-    finally { await this.ctx.storage.setAlarm(Date.now() + SYNC_MINUTES * 60_000); }
+    finally { await this.ctx.storage.setAlarm(Date.now() + nextSyncDelay()); }
   }
 
   async sync() {
@@ -330,7 +336,8 @@ export class StudoStore extends DurableObject {
     const expires = new Date(Date.now() + SESSION_DAYS * 86400_000).toISOString();
     this.sql.exec("INSERT INTO sessions(token_hash, expires_at) VALUES(?,?)", await sha256(token), expires);
     this.sql.exec("DELETE FROM sessions WHERE expires_at < ?", new Date().toISOString());
-    if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(Date.now() + SYNC_MINUTES * 60_000);
+    const alarm = await this.ctx.storage.getAlarm();
+    if (alarm === null || alarm > Date.now() + nextSyncDelay()) await this.ctx.storage.setAlarm(Date.now() + nextSyncDelay());
     this.track("login", { uni, username });
     this.ctx.waitUntil(this.sync().catch(() => {}));
     return { ok: true, token, firstLogin };
@@ -435,6 +442,12 @@ export class StudoStore extends DurableObject {
 
     const session = parseSession(request);
     if (!(await this.sessionValid(session?.token))) return error(401, "Nicht angemeldet");
+    if (!this.alarmChecked) {
+      // Ältere Konten haben noch den 30-Minuten-Takt: einmal pro Instanz auf den neuen Takt bringen
+      this.alarmChecked = true;
+      const alarm = await this.ctx.storage.getAlarm();
+      if (alarm === null || alarm > Date.now() + nextSyncDelay()) await this.ctx.storage.setAlarm(Date.now() + nextSyncDelay());
+    }
 
     if (path === "/api/logout" && method === "POST") {
       this.sql.exec("DELETE FROM sessions WHERE token_hash=?", await sha256(session.token));
@@ -483,6 +496,11 @@ export class StudoStore extends DurableObject {
     }
 
     if (path === "/api/sync" && method === "POST") {
+      // Beim Öffnen der App: nur holen, wenn der letzte Abgleich älter als 3 Minuten ist
+      if (url.searchParams.get("if_stale")) {
+        const last = Date.parse(this.getSetting("last_sync") || 0);
+        if (Date.now() - last < 3 * 60_000) return json({ skipped: true });
+      }
       try { return json(await this.sync()); } catch (e) { return error(502, `Sync fehlgeschlagen: ${e.message}`); }
     }
 
@@ -505,20 +523,20 @@ export class StudoStore extends DurableObject {
         uid: r.uid, course_id: r.course_id, title: r.title, kind: r.kind, start: r.start, end: r.end,
         status: r.status, building: r.building, room: r.room, room_raw: r.room_raw,
         location: formatRoom(r.building, r.room), attendance: !!r.attendance,
-        is_override: !!r.is_override, course_attendance: !!r.course_attendance,
+        is_override: !!r.is_override, course_attendance: !!r.course_attendance, short: r.short || null,
       })));
     }
 
     if (path === "/api/courses" && method === "GET") {
       const now = new Date().toISOString();
-      const rows = this.sql.exec(`SELECT c.*, COALESCE(cs.attendance, 0) AS attendance,
+      const rows = this.sql.exec(`SELECT c.*, COALESCE(cs.attendance, 0) AS attendance, cs.short AS short,
           (SELECT COUNT(*) FROM events e WHERE e.course_id = c.course_id AND e.status='confirmed') AS n,
           (SELECT MIN(e.start) FROM events e WHERE e.course_id = c.course_id AND e.status='confirmed' AND e.start > ?) AS next_start
         FROM courses c LEFT JOIN course_settings cs ON cs.course_id = c.course_id ORDER BY c.title`, now).toArray();
       const courses = rows.map((r) => ({
         course_id: r.course_id, title: r.title, nr: r.nr, kinds: r.kinds, lecturer: r.lecturer, events: r.n, next_start: r.next_start,
         first_start: r.first_start, last_end: r.last_end,
-        semesters: r.semesters ? r.semesters.split(",") : [], attendance: !!r.attendance,
+        semesters: r.semesters ? r.semesters.split(",") : [], attendance: !!r.attendance, short: r.short || null,
       }));
       const semesters = [...new Set(courses.flatMap((c) => c.semesters))].sort((a, b) => semesterKey(b) - semesterKey(a));
       return json({ courses, semesters, current: semesterOf(new Date()) });
@@ -607,6 +625,15 @@ export class StudoStore extends DurableObject {
       this.sql.exec("INSERT INTO course_settings(course_id, attendance) VALUES(?,?) ON CONFLICT(course_id) DO UPDATE SET attendance=excluded.attendance", id, attendance ? 1 : 0);
       this.touch("course_id=?", id);
       return json({ ok: true });
+    }
+
+    const shortM = path.match(/^\/api\/courses\/(.+)\/short$/);
+    if (shortM && method === "PUT") {
+      const id = decodeURIComponent(shortM[1]);
+      const { short } = await request.json().catch(() => ({}));
+      const v = typeof short === "string" ? short.trim().slice(0, 12) || null : null;
+      this.sql.exec("INSERT INTO course_settings(course_id, short) VALUES(?,?) ON CONFLICT(course_id) DO UPDATE SET short=excluded.short", id, v);
+      return json({ ok: true, short: v });
     }
 
     const single = path.match(/^\/api\/events\/(.+)\/attendance$/);

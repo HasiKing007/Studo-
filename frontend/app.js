@@ -20,7 +20,6 @@ const fmtDate = new Intl.DateTimeFormat("de-AT", { day: "numeric", month: "numer
 const fmtNum = new Intl.NumberFormat("de-AT", { maximumFractionDigits: 2 });
 const fmtAvg = new Intl.NumberFormat("de-AT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-if (!("switch" in HTMLInputElement.prototype)) document.documentElement.classList.add("no-native-switch");
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");
 
 // ---------- Erscheinungsbild (Standard: hell) ----------
@@ -131,6 +130,19 @@ function titleWithKind(kind, title, tag = "span") {
   return n;
 }
 
+// Kurzname für die Wochenansicht: eigenes Kürzel, sonst aus den Anfangsbuchstaben der wichtigen Wörter
+// ("Marktorientiertes Management: Grundlagen" -> "MMG", "Lineare Algebra" -> "LA", "Statistik" -> "Stati")
+const STOP = new Set(["in", "die", "der", "das", "den", "dem", "des", "und", "für", "von", "zu", "zur", "zum", "mit", "im", "am", "an", "auf", "aus", "bei", "über", "the", "of", "and", "to", "for", "a", "an", "into", "on"]);
+function autoShort(title) {
+  const words = String(title || "").replace(/\(.*?\)/g, " ").split(/[\s/:,–-]+/).filter((w) => w && !STOP.has(w.toLowerCase()));
+  if (!words.length) return "";
+  const text = words.filter((w) => !/^(\d+|[IVX]+)$/.test(w)), nums = words.filter((w) => /^(\d+|[IVX]+)$/.test(w));
+  // Ein einziges Wort (+ Nummer): Wortanfang statt nur Initiale ("Analysis 1" -> "Analy 1")
+  if (text.length === 1) return [text[0].slice(0, 5), ...nums].join(" ");
+  return words.map((w) => (/^\d+$/.test(w) ? w : /^[IVX]+$/.test(w) ? w : w[0].toUpperCase())).join("").slice(0, 6);
+}
+const shortName = (x) => x.short || autoShort(x.title);
+
 // Initialen aus dem echten Namen ("Jacob Haselgruber" -> "JH"), sonst Personen-Symbol
 function initials(name) {
   const parts = String(name || "").trim().split(/\s+/).filter((p) => /^\p{L}/u.test(p));
@@ -176,8 +188,13 @@ document.body.append(shade);
 let navLockUntil = 0, ownBack = false, settling = false;
 const navLocked = () => Date.now() < navLockUntil;
 const lockNav = (ms = 480) => { navLockUntil = Date.now() + ms; };
-history.replaceState({ depth: -1 }, "");
-history.pushState({ depth: 0 }, "");
+// Als Home-Bildschirm-App gibt es keinen Browser-Verlauf: dann hat iOS keine eigene Zurück-Geste
+// (die zeigte veraltete, teils helle Bildschirmfotos) und wir wischen selbst – nur aus Unterseiten.
+const STANDALONE = navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
+if (!STANDALONE) {
+  history.replaceState({ depth: -1 }, "");
+  history.pushState({ depth: 0 }, "");
+}
 
 function pushPage(title, build, { head = true } = {}) {
   if (navLocked()) return null; // Doppeltipp öffnet nicht zwei Seiten übereinander
@@ -195,6 +212,7 @@ function pushPage(title, build, { head = true } = {}) {
   const entry = { page, title, body, build };
   build(body, entry);
   page.addEventListener("scroll", () => page.classList.toggle("scrolled", page.scrollTop > 30), { passive: true });
+  if (STANDALONE) enableEdgeSwipe(page);
   $("#pages").append(page);
   stack.at(-1)?.page.classList.add("under");
   stack.push(entry);
@@ -204,12 +222,14 @@ function pushPage(title, build, { head = true } = {}) {
   page.style.pointerEvents = "none";
   setTimeout(() => { page.style.pointerEvents = ""; }, 450);
   requestAnimationFrame(() => requestAnimationFrame(() => page.classList.add("in")));
-  history.pushState({ depth: stack.length }, "");
+  if (!STANDALONE) history.pushState({ depth: stack.length }, "");
   return entry;
 }
 function goBack() {
   if (!stack.length || navLocked()) return;
-  lockNav(); ownBack = true; history.back();
+  lockNav();
+  if (STANDALONE) popTop(true);
+  else { ownBack = true; history.back(); }
 }
 function refreshPage(entry) { entry.body.replaceChildren(); entry.build(entry.body, entry); }
 function popTop(animate = true) {
@@ -229,6 +249,7 @@ function popTop(animate = true) {
   else { shade.classList.remove("on"); document.body.classList.toggle("locked", state.tab === "calendar"); for (const w of weekCache.values()) w.at = 0; renderTab(state.tab); }
 }
 addEventListener("popstate", (e) => {
+  if (STANDALONE) return;
   const depth = e.state?.depth ?? -1;
   if (settling) {
     // Wieder bei der Sperre angekommen: Tab + offene Seiten neu eintragen, Vorwärts-Verlauf ist damit weg
@@ -249,7 +270,43 @@ function closeAllPages() {
   const n = stack.length;
   while (stack.length) stack.pop().page.remove();
   shade.classList.remove("on"); document.body.classList.toggle("locked", state.tab === "calendar" && !$("#app").hidden);
-  if (n) { settling = true; history.go(-(n + 1)); }
+  if (n && !STANDALONE) { settling = true; history.go(-(n + 1)); }
+}
+
+// Vom linken Rand wischen schließt die oberste Unterseite (nur Home-Bildschirm-App, s. o.)
+function enableEdgeSwipe(page) {
+  let x0 = null, dx = 0, t0 = 0, dir = null, y0 = 0;
+  const under = () => stack.at(-2)?.page;
+  page.addEventListener("touchstart", (e) => {
+    if (e.touches[0].clientX > 30 || stack.at(-1)?.page !== page || navLocked()) return;
+    x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = 0; dir = null; t0 = Date.now();
+  }, { passive: true });
+  page.addEventListener("touchmove", (e) => {
+    if (x0 === null) return;
+    const mx = e.touches[0].clientX - x0, my = e.touches[0].clientY - y0;
+    if (!dir) { if (Math.abs(mx) < 6 && Math.abs(my) < 6) return; dir = mx > Math.abs(my) ? "h" : "v"; if (dir === "v") { x0 = null; return; }
+      page.classList.add("no-anim"); under()?.classList.add("no-anim"); }
+    e.preventDefault();
+    dx = Math.max(0, mx);
+    const f = dx / innerWidth;
+    page.style.transform = `translate3d(${dx}px,0,0)`;
+    const u = under(); if (u) u.style.transform = `translate3d(${-28 * (1 - f)}%,0,0)`;
+    shade.style.opacity = String(1 - f);
+  }, { passive: false });
+  const end = () => {
+    if (x0 === null) return;
+    x0 = null;
+    page.classList.remove("no-anim"); under()?.classList.remove("no-anim");
+    const fast = dx / Math.max(1, Date.now() - t0) > 0.5;
+    const close = dx > innerWidth * 0.35 || (fast && dx > 40);
+    requestAnimationFrame(() => {
+      page.style.transform = ""; shade.style.opacity = "";
+      const u = under(); if (u) u.style.transform = "";
+      if (close) { lockNav(); popTop(true); }
+    });
+  };
+  page.addEventListener("touchend", end);
+  page.addEventListener("touchcancel", end);
 }
 
 // Formular-Seite (Note hinzufügen, KUSSS-Passwort, Studienrichtung …)
@@ -441,36 +498,6 @@ function hDrag(target, { canStart = () => true, onMove, onEnd }) {
 }
 const EASE = "cubic-bezier(.25,.8,.25,1)";
 
-// Zwischen den Tabs wischen (nicht am Bildschirmrand: dort liegen die Gesten des Systems)
-const TABS = Object.keys(TAB_TITLES);
-hDrag($("#app main"), {
-  canStart: (e) => {
-    const x = e.touches[0].clientX;
-    return !stack.length && x > 22 && x < innerWidth - 22 && !e.target.closest(".chips, .links, #cal-view, input, select, textarea, .segmented, .switch, .ring, .chart");
-  },
-  onMove: (dx) => {
-    const i = TABS.indexOf(state.tab), tab = $(`#tab-${state.tab}`);
-    const edge = (dx > 0 && i === 0) || (dx < 0 && i === TABS.length - 1);
-    const d = edge ? dx * 0.2 : dx;
-    tab.style.transform = `translate3d(${d}px,0,0)`;
-    tab.style.opacity = String(1 - Math.min(0.5, Math.abs(d) / innerWidth));
-  },
-  onEnd: (dx, v) => {
-    const i = TABS.indexOf(state.tab), tab = $(`#tab-${state.tab}`);
-    const next = TABS[i + (dx < 0 ? 1 : -1)];
-    const commit = next && (Math.abs(dx) > innerWidth * 0.25 || (Math.abs(v) > 0.4 && Math.abs(dx) > 40));
-    const from = tab.style.transform, op = tab.style.opacity;
-    tab.style.transform = ""; tab.style.opacity = "";
-    if (!commit) { tab.animate([{ transform: from, opacity: op }, { transform: "none", opacity: 1 }], { duration: 220, easing: EASE }); return; }
-    const sign = dx < 0 ? -1 : 1;
-    haptic();
-    tab.animate([{ transform: from, opacity: op }, { transform: `translate3d(${sign * innerWidth * 0.45}px,0,0)`, opacity: 0 }], { duration: 140, easing: "ease-in" })
-      .finished.then(() => {
-        switchTab(next);
-        $(`#tab-${next}`).animate([{ transform: `translate3d(${-sign * 70}px,0,0)`, opacity: 0 }, { transform: "none", opacity: 1 }], { duration: 260, easing: EASE });
-      });
-  },
-});
 addEventListener("scroll", () => $$(".appbar").forEach((a) => a.classList.toggle("scrolled", scrollY > 40)), { passive: true });
 
 async function fetchEvents(from, to) {
@@ -763,8 +790,15 @@ function timeGrid(days, byDay, mode) {
       b.classList.toggle("cancelled", p.e.status === "cancelled");
       b.style.top = `${top + 1}px`; b.style.height = `${dur}px`;
       b.style.left = `${(p.lane / n) * 100}%`; b.style.width = `calc(${100 / n}% - 3px)`;
-      b.append(titleWithKind(p.e.kind, p.e.title, "b"));
-      if (mode === "day") b.append(el("span", "", `${fmtTime.format(p.s)} – ${fmtTime.format(p.en)}${p.e.location ? " · " + p.e.location : ""}`));
+      if (mode === "day") {
+        b.append(titleWithKind(p.e.kind, p.e.title, "b"));
+        b.append(el("span", "", `${fmtTime.format(p.s)} – ${fmtTime.format(p.en)}${p.e.location ? " · " + p.e.location : ""}`));
+      } else {
+        // Woche: zu schmal für ganze Titel -> Kürzel, darunter der Raum
+        b.title = p.e.title;
+        b.append(titleWithKind(p.e.kind, shortName(p.e), "b"));
+        if (p.e.room || p.e.location) b.append(el("span", "room", p.e.status === "cancelled" ? "entfällt" : p.e.room || p.e.location));
+      }
       if (p.e.attendance) b.append(el("span", "must", "!"));
       b.addEventListener("click", () => openEvent(p.e));
       col.append(b);
@@ -863,7 +897,17 @@ async function openCourse(id) {
       await put(`/api/courses/${encodeURIComponent(c.course_id)}/attendance`, { attendance: v });
       c.attendance = v;
     }));
-    body.append(header("Zusatzfunktion"), group(r), note("Gilt für alle Termine. Einzelne Termine änderst du im Termin selbst."));
+    const sl = el("label", "row");
+    const si = el("input"); si.placeholder = autoShort(c.title); si.value = c.short || ""; si.maxLength = 12;
+    si.autocapitalize = "characters"; si.enterKeyHint = "done";
+    si.addEventListener("change", async () => {
+      try { const r = await put(`/api/courses/${encodeURIComponent(c.course_id)}/short`, { short: si.value }); c.short = r.short; weekCache.clear(); haptic(); }
+      catch (err) { alert(err.message); }
+    });
+    si.addEventListener("keydown", (e) => { if (e.key === "Enter") si.blur(); });
+    sl.append(el("span", "row-label", "Kürzel"), si);
+    body.append(header("Zusatzfunktion"), group(r), note("Gilt für alle Termine. Einzelne Termine änderst du im Termin selbst."),
+      header("Wochenansicht"), group(sl), note("So heißt der Kurs in der Wochenansicht. Leer lassen für den Vorschlag."));
     const upcoming = group(el("div", "row empty-row", "Lade Termine …"));
     body.append(header("Nächste Termine"), upcoming);
     const from = new Date(), to = c.last_end ? new Date(c.last_end) : addDays(from, 120);
@@ -886,8 +930,19 @@ function currentSemester(d = new Date()) {
   const y = d.getFullYear(), m = d.getMonth() + 1;
   return normSem(m >= 10 ? `${y}W` : m <= 2 ? `${y - 1}W` : `${y}S`);
 }
+// Dieselbe LVA kann mehrfach in KUSSS stehen (z. B. Notenverbesserung, Teilleistungen):
+// pro LVA zählt nur die neueste positive Beurteilung, sonst würden ECTS doppelt gezählt
+function uniquePassed(grades) {
+  const best = new Map();
+  for (const g of grades.filter(isPassed)) {
+    const k = g.nr ? `nr:${String(g.nr).replace(/\D/g, "")}:${g.kind || ""}` : `t:${normTitle(g.title)}:${g.kind || ""}`;
+    const prev = best.get(k);
+    if (!prev || String(g.date || "") > String(prev.date || "")) best.set(k, g);
+  }
+  return [...best.values()];
+}
 function studyNumbers(grades, target) {
-  const passed = grades.filter(isPassed);
+  const passed = uniquePassed(grades);
   const ects = passed.reduce((s, g) => s + (+g.ects || 0), 0);
   const graded = passed.filter((g) => g.grade >= 1 && g.grade <= 4);
   const w = graded.reduce((s, g) => s + (+g.ects || 1), 0);
@@ -1373,9 +1428,22 @@ async function boot() {
   renderLinks();
   switchTab("home");
   endSplash();
+  freshen();
 }
 
+// Beim Öffnen/Zurückkehren: Stundenplan frisch holen, wenn der letzte Abgleich älter als 3 Minuten ist
+let freshening = false;
+async function freshen() {
+  if (freshening || !state.me || state.me.demo || $("#app").hidden) return;
+  freshening = true;
+  try {
+    const r = await post("/api/sync?if_stale=1");
+    if (!r?.skipped) { for (const w of weekCache.values()) w.at = 0; await loadMe(); if (!stack.length) renderTab(state.tab); }
+  } catch {} finally { freshening = false; }
+}
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && state.me && !$("#app").hidden && !stack.length) renderTab(state.tab);
+  if (document.hidden || !state.me || $("#app").hidden) return;
+  if (!stack.length) renderTab(state.tab);
+  freshen();
 });
 boot();
