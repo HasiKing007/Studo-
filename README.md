@@ -1,3 +1,37 @@
 # Studo+
 
-Persönliche Uni-Organizer-App für die JKU Linz.
+Persönliche JKU-Organizer-App: Stundenplan aus KUSSS, Anwesenheitspflicht-Schalter, abonnierbarer Apple-Kalender, Schnellzugriffe, installierbar als iOS-PWA.
+
+Architektur, Sicherheitskonzept und Entwicklungsplan: [docs/ARCHITEKTUR.md](docs/ARCHITEKTUR.md)
+
+## Schnellstart (Demo, ohne JKU-Zugang)
+
+```bash
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"   # in .env als STUDO_MASTER_KEY eintragen
+# in .env: STUDO_DEMO=1
+./run.sh
+```
+
+Dann http://localhost:8000 öffnen und mit beliebigem Benutzernamen/Passwort anmelden.
+
+## Mit echter JKU
+
+1. In `.env` `STUDO_DEMO=0` und `STUDO_BASE_URL` auf deine HTTPS-Adresse setzen.
+2. In KUSSS den persönlichen Kalender-Export-Link kopieren und in der App unter *Einstellungen → KUSSS-Kalender* einfügen.
+3. Optional für den Login mit JKU-Daten: `pip install playwright && playwright install chromium`.
+4. Auf dem iPhone: Safari → Teilen → *Zum Home-Bildschirm*. Im Tab *Kalender* auf *In Apple Kalender abonnieren* tippen.
+
+## Tests
+
+```bash
+cd backend && python -m pytest -q
+```
+
+## Sicherheit in Kürze
+
+- `STUDO_MASTER_KEY` nie committen. Ohne ihn sind gespeicherte Geheimnisse nicht lesbar (Absicht).
+- Nur über HTTPS betreiben, idealerweise nur im eigenen Tailnet.
+- Der Abo-Link ist ein Geheimnis. Bei Verdacht in den Einstellungen erneuern.
