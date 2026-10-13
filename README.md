@@ -1,6 +1,6 @@
 # Studo+
 
-Uni-Organizer-App: Stundenplan automatisch aus KUSSS (JKU) oder per iCal-Link (andere Hochschulen), Anwesenheitspflicht-Schalter, abonnierbarer Apple-Kalender, Schnellzugriffe, installierbar als iOS-PWA. Mehrere Nutzer:innen, jede:r mit eigenem Konto, plus Admin-Nutzungsübersicht.
+Uni-Organizer-App: Stundenplan automatisch aus KUSSS (JKU) oder per iCal-Link (andere Hochschulen), Kalender mit Tages- und Wochenansicht, Kurse nach Semester, Noten und Studienfortschritt (ECTS pro Studienrichtung), Anwesenheitspflicht als Zusatzfunktion, abonnierbarer Apple-Kalender, Schnellzugriffe, installierbar als iOS-PWA. Mehrere Nutzer:innen, jede:r mit eigenem Konto, plus eigenes Admin-Konto mit Nutzungsübersicht.
 
 Architektur, Sicherheitskonzept und Entwicklungsplan: [docs/ARCHITEKTUR.md](docs/ARCHITEKTUR.md)
 

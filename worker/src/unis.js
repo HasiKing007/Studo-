@@ -6,14 +6,19 @@ export const UNIS = {
   jku: {
     name: "JKU Linz",
     auth: "jku",
-    userLabel: "k-Nummer",
-    userPlaceholder: "k12345678",
+    userLabel: "Matrikelnummer",
+    userPlaceholder: "12345678",
     icalHint: "KUSSS → Studierzimmer → Terminexport → Kalender Abonnement → Create.",
     rooms: "jku",
+    // Einstiegs-URLs, die direkt das JKU-Single-Sign-on auslösen: Wer im Browser schon
+    // einmal angemeldet ist, landet ohne erneute Passworteingabe im jeweiligen System.
     links: [
-      { id: "kusss", name: "KUSSS", url: "https://www.kusss.jku.at/kusss/index.action", icon: "grid" },
-      { id: "moodle", name: "Moodle", url: "https://moodle.jku.at/", icon: "book" },
+      { id: "kusss", name: "KUSSS", url: "https://www.kusss.jku.at/kusss/login.action", icon: "grid" },
+      { id: "moodle", name: "Moodle", url: "https://moodle.jku.at/jku/login/index.php", icon: "book" },
+      { id: "lisss", name: "LISSS", url: "https://lisss.jku.at/", icon: "library" },
       { id: "mail", name: "JKU-Mail", url: "https://outlook.office.com/mail/", icon: "mail" },
+      { id: "handbuch", name: "Studienhandbuch", url: "https://studienhandbuch.jku.at/", icon: "search" },
+      { id: "oeh", name: "ÖH JKU", url: "https://oeh.jku.at/", icon: "people" },
     ],
   },
   tuwien: {
@@ -117,14 +122,17 @@ export function publicUnis() {
   }));
 }
 
-export function normalizeUser(username) {
-  return String(username || "").trim().toLowerCase();
+/** Benutzername vereinheitlichen. JKU: Matrikelnummer mit oder ohne "k" -> "k12345678". */
+export function normalizeUser(username, uni = null) {
+  const u = String(username || "").trim().toLowerCase().replace(/\s+/g, "");
+  if (uni === "jku" && /^k?\d{6,9}$/.test(u)) return `k${u.replace(/^k/, "")}`;
+  return u;
+}
+
+/** Matrikelnummer zur Anzeige (JKU ohne "k"). */
+export function matrikel(uni, username) {
+  return uni === "jku" ? String(username || "").replace(/^k/, "") : String(username || "");
 }
 
 export const USER_RE = /^[a-z0-9][a-z0-9._@+-]{1,63}$/;
 
-/** ADMIN_USERS="k12349173, tuwien:e1234" -> Set("jku:k12349173", "tuwien:e1234"). Ohne Präfix gilt JKU. */
-export function adminSet(env) {
-  return new Set(String(env.ADMIN_USERS || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)
-    .map((s) => (s.includes(":") ? s : `jku:${s}`)));
-}

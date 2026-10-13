@@ -49,7 +49,14 @@ function fakeJku({ password = "richtig", hasLink = false } = {}) {
     if (u.pathname === "/kusss/studentwelcome.action") {
       assert.match(init.headers.Cookie, /_shibsession_x=ok/);
       assert.match(init.headers.Cookie, /JSESSIONID=kusss1/);
-      return page('<a href="logout.action">Logout</a>');
+      return page('<div><b>Jacob Lorenz Haselgruber | Username: K12345678</b> <a href="logout.action">Logout</a></div>');
+    }
+    if (u.pathname === "/kusss/gradeinfo.action") {
+      return page(`<h3>Notenauskunft</h3><h4>Bachelorstudium Informatik</h4>
+        <table><tr><th>Datum</th><th>Lehrveranstaltung</th><th>LVA-Typ</th><th>Note</th><th>SSt</th><th>ECTS</th></tr>
+        <tr><td>03.02.2026</td><td>336.100 Analysis 1</td><td>VL</td><td>gut (2)</td><td>3,0</td><td>4,5</td></tr>
+        <tr><td>10.02.2026</td><td>351.001 Softwareentwicklung 1</td><td>UE</td><td>mit Erfolg teilgenommen</td><td>2</td><td>3</td></tr>
+        <tr><td>12.02.2026</td><td>336.200 Lineare Algebra</td><td>VL</td><td>nicht genügend</td><td>3</td><td>4,5</td></tr></table>`);
     }
     if (u.pathname === "/kusss/ical-multi-form-sz.action") {
       const cell = linkCreated
@@ -73,7 +80,15 @@ function fakeJku({ password = "richtig", hasLink = false } = {}) {
 test("JKU-Login: SSO-Durchlauf und Abo-Link per Create anlegen", async () => {
   const { fetchImpl, calls } = fakeJku();
   const r = await jkuConnect("k12345678", "richtig", fetchImpl);
-  assert.deepEqual(r, { status: "ok", icalUrl: "https://www.kusss.jku.at/kusss/published-calendar.action?token=SECRET123&lang=de" });
+  assert.equal(r.status, "ok");
+  assert.equal(r.icalUrl, "https://www.kusss.jku.at/kusss/published-calendar.action?token=SECRET123&lang=de");
+  assert.equal(r.name, "Jacob Lorenz Haselgruber");
+  assert.deepEqual(r.grades.programs, ["Bachelorstudium Informatik"]);
+  assert.deepEqual(r.grades.grades.map((g) => [g.nr, g.title, g.kind, g.grade, g.passed, g.ects, g.date]), [
+    ["336.100", "Analysis 1", "VL", 2, true, 4.5, "2026-02-03"],
+    ["351.001", "Softwareentwicklung 1", "UE", null, true, 3, "2026-02-10"],
+    ["336.200", "Lineare Algebra", "VL", 5, false, 4.5, "2026-02-12"],
+  ]);
   assert.ok(calls.some((c) => c.url.endsWith("ical-create.action")));
 });
 

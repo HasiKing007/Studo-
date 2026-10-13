@@ -13,6 +13,7 @@
   <meta name="apple-mobile-web-app-title" content="Studo+">
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
   <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png">
   <link rel="manifest" href="/manifest.json">
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -28,66 +29,157 @@
   <!-- Login -->
   <section id="login" class="screen reveal" hidden>
     <div class="login-box">
-      <img class="login-logo" src="/icons/icon-512.png" alt="Studo+" width="96" height="96">
-      <h1 class="login-title">Studo<span class="plus">+</span></h1>
-      <p class="muted login-sub">Melde dich mit deinem Uni-Account an.</p>
+      <header class="login-head">
+        <h1 class="wordmark">Studo<span class="plus">+</span></h1>
+        <p class="login-sub">Dein Studium. Organisiert.</p>
+      </header>
+
+      <ul class="features" aria-label="Funktionen">
+        <li><span class="feat-ico"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15.5" rx="3"/><path d="M4 10h16M8.5 3v4M15.5 3v4"/></svg></span>
+          <div><strong>Stundenplan automatisch</strong><span>Direkt aus KUSSS, immer aktuell.</span></div></li>
+        <li><span class="feat-ico"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 19h14"/></svg></span>
+          <div><strong>Im Apple Kalender</strong><span>Als Abo, mit Anwesenheitspflicht markiert.</span></div></li>
+        <li><span class="feat-ico"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg></span>
+          <div><strong>Noten &amp; ECTS</strong><span>Studienfortschritt und Notenschnitt.</span></div></li>
+      </ul>
+
       <form id="login-form" autocomplete="on">
         <div class="group">
-          <label class="row"><span>Hochschule</span>
+          <label class="row"><span class="row-label">Hochschule</span>
             <select name="uni" id="login-uni"><option value="jku">JKU Linz</option></select></label>
-          <label class="row"><span id="login-user-label">k-Nummer</span>
-            <input name="username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="k12345678" required></label>
-          <label class="row"><span>Passwort</span>
+          <label class="row"><span class="row-label" id="login-user-label">Matrikelnummer</span>
+            <input name="username" autocomplete="username" inputmode="text" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="12345678" required></label>
+          <label class="row"><span class="row-label">Passwort</span>
             <input name="password" type="password" autocomplete="current-password" placeholder="Passwort" required></label>
         </div>
         <p class="footnote" id="login-hint"></p>
         <button class="btn-primary" type="submit"><span class="spinner" hidden></span><span class="label">Anmelden</span></button>
       </form>
       <p id="login-error" class="error" role="alert"></p>
+      <button class="link-btn" id="to-admin" type="button">Admin-Anmeldung</button>
     </div>
+  </section>
+
+  <!-- Admin-Login (eigenes Konto) -->
+  <section id="admin-login" class="screen" hidden>
+    <div class="login-box">
+      <header class="login-head">
+        <h1 class="wordmark">Studo<span class="plus">+</span> <span class="wordmark-tag">Admin</span></h1>
+        <p class="login-sub">Nutzungsübersicht für Betreiber</p>
+      </header>
+      <form id="admin-form" autocomplete="on">
+        <div class="group">
+          <label class="row"><span class="row-label">Benutzer</span>
+            <input name="username" autocomplete="username" autocapitalize="none" value="admin" required></label>
+          <label class="row"><span class="row-label">Passwort</span>
+            <input name="password" type="password" autocomplete="current-password" placeholder="Passwort" required></label>
+        </div>
+        <button class="btn-primary" type="submit"><span class="label">Anmelden</span></button>
+      </form>
+      <p id="admin-error" class="error" role="alert"></p>
+      <button class="link-btn" id="admin-back-login" type="button">Zurück zur Studierenden-Anmeldung</button>
+    </div>
+  </section>
+
+  <!-- Admin-Übersicht -->
+  <section id="admin-screen" hidden>
+    <header class="appbar"><span class="appbar-title">Studo+ Admin</span>
+      <button class="text-btn" id="admin-logout">Abmelden</button></header>
+    <main>
+      <div class="large-title"><h1>Nutzung</h1><p class="subtitle" id="admin-updated"></p></div>
+      <div class="stats" id="admin-stats"></div>
+      <h2 class="section-header">Letzte 14 Tage</h2>
+      <div class="group chart-box">
+        <div class="chart" id="admin-chart"></div>
+        <div class="legend"><span class="dot dot-a"></span>App geöffnet <span class="dot dot-b"></span>Kalender-Abrufe</div>
+      </div>
+      <h2 class="section-header">Hochschulen</h2>
+      <div class="group" id="admin-unis"></div>
+      <h2 class="section-header">Konten</h2>
+      <div class="group" id="admin-users"></div>
+    </main>
   </section>
 
   <!-- App -->
   <div id="app" class="reveal" hidden>
     <header class="appbar">
-      <div class="appbar-brand"><img class="logo" src="/icons/icon-192.png" alt="" width="40" height="40"><span>Studo<span class="plus">+</span></span></div>
-      <button class="avatar" id="avatar" aria-label="Einstellungen"></button>
+      <span class="appbar-title" id="appbar-title"></span>
+      <button class="avatar" id="avatar" aria-label="Profil"></button>
     </header>
 
     <main>
+      <!-- Heute -->
       <section id="tab-today" class="tab">
         <div class="large-title"><h1>Heute</h1><p class="subtitle" id="today-date"></p></div>
         <div id="notice" class="notice" hidden></div>
-        <div id="today-list" class="list"></div>
-        <h2 class="section-header">Schnellzugriffe</h2>
+        <div id="next-card"></div>
+        <h2 class="section-header" id="today-head">Termine heute</h2>
+        <div id="today-list" class="group"></div>
+        <h2 class="section-header" id="links-head">Schnellzugriffe</h2>
         <div id="quick-links" class="links"></div>
+        <p class="footnote" id="links-hint"></p>
       </section>
 
+      <!-- Kalender -->
       <section id="tab-calendar" class="tab" hidden>
-        <div class="large-title"><h1>Kalender</h1><p class="subtitle" id="week-label"></p></div>
+        <div class="large-title cal-title">
+          <div><h1 id="cal-month">Kalender</h1><p class="subtitle" id="cal-range"></p></div>
+          <button class="pill-btn" id="cal-today">Heute</button>
+        </div>
+        <div class="cal-controls">
+          <div class="segmented" id="cal-mode">
+            <button data-mode="day" class="on">Tag</button><button data-mode="week">Woche</button><button data-mode="list">Liste</button>
+          </div>
+          <div class="cal-nav">
+            <button id="cal-prev" class="icon-btn" aria-label="Zurück"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+            <button id="cal-next" class="icon-btn" aria-label="Weiter"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+          </div>
+        </div>
+        <div id="week-strip" class="week-strip"></div>
+        <div id="cal-view"></div>
         <a id="subscribe" class="banner" href="#">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="3"/><path d="M4 10h16M8.5 3v4M15.5 3v4M12 13v4M10 15h4"/></svg>
           <span>In Apple Kalender abonnieren</span></a>
-        <div class="week-nav">
-          <button id="week-prev" class="icon-btn" aria-label="Vorige Woche"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
-          <div id="week-strip" class="week-strip"></div>
-          <button id="week-next" class="icon-btn" aria-label="Nächste Woche"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
-        </div>
-        <div id="calendar-list" class="list"></div>
-
-        <h2 class="section-header">Kurse · Anwesenheitspflicht</h2>
-        <div id="course-list" class="group"></div>
-        <p class="footnote">Gilt für alle Termine des Kurses. Einzelne Termine änderst du durch Antippen der Terminkarte.</p>
+        <p class="footnote">Termine mit Anwesenheitspflicht sind mit <span class="must-inline">!</span> markiert. Antippen öffnet die Details.</p>
       </section>
 
+      <!-- Kurse -->
+      <section id="tab-courses" class="tab" hidden>
+        <div class="large-title"><h1>Kurse</h1><p class="subtitle" id="courses-sub"></p></div>
+        <div class="chips" id="sem-chips"></div>
+        <div id="course-list" class="group"></div>
+        <p class="footnote">Kurse kommen aus deinem Stundenplan. Antippen zeigt Termine, Note und Anwesenheitspflicht.</p>
+      </section>
+
+      <!-- Studium -->
+      <section id="tab-study" class="tab" hidden>
+        <div class="large-title"><h1>Studium</h1><p class="subtitle" id="study-sub"></p></div>
+        <div class="chips" id="program-chips"></div>
+        <div id="study-error" class="notice" hidden></div>
+        <div class="progress-card" id="progress-card"></div>
+        <div class="stats" id="study-stats"></div>
+        <h2 class="section-header">ECTS pro Semester</h2>
+        <div class="group chart-box"><div class="chart chart-sem" id="ects-chart"></div></div>
+        <h2 class="section-header">Notenverteilung</h2>
+        <div class="group chart-box"><div class="dist" id="grade-dist"></div></div>
+        <div class="group group-spaced">
+          <button id="btn-grades-refresh" class="row row-btn">Noten aus KUSSS laden</button>
+          <button id="btn-grade-add" class="row row-btn">Note manuell hinzufügen</button>
+        </div>
+        <p class="footnote" id="grades-synced"></p>
+        <div id="grade-list"></div>
+      </section>
+
+      <!-- Einstellungen -->
       <section id="tab-settings" class="tab" hidden>
         <div class="large-title"><h1>Einstellungen</h1></div>
 
         <div class="group">
-          <div class="row profile">
+          <button class="row profile row-nav" id="btn-profile">
             <div class="avatar avatar-lg" id="set-avatar"></div>
-            <div class="profile-text"><strong id="set-user"></strong><span class="muted" id="set-uni"></span></div>
-          </div>
+            <div class="profile-text"><strong id="set-name"></strong><span class="muted" id="set-sub"></span></div>
+            <svg class="chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>
+          </button>
         </div>
 
         <h2 class="section-header">Stundenplan</h2>
@@ -99,13 +191,13 @@
         <p id="sync-error" class="error"></p>
 
         <div id="jku-connect" hidden>
-          <h2 class="section-header">KUSSS automatisch verbinden</h2>
+          <h2 class="section-header">KUSSS neu verbinden</h2>
           <form id="jku-form" class="group">
-            <label class="row"><span>JKU-Passwort</span>
+            <label class="row"><span class="row-label">JKU-Passwort</span>
               <input name="password" type="password" autocomplete="current-password" placeholder="Passwort" required></label>
-            <button class="row row-btn" type="submit">Kalender-Link von KUSSS holen</button>
+            <button class="row row-btn" type="submit">Kalender und Noten von KUSSS holen</button>
           </form>
-          <p class="footnote">Studo+ meldet sich einmal bei KUSSS an und übernimmt deinen Kalender-Abo-Link. Das Passwort wird dafür nur kurz verwendet und nicht gespeichert.</p>
+          <p class="footnote">Studo+ meldet sich einmal bei KUSSS an und übernimmt Kalender-Link und Noten. Das Passwort wird nur dafür verwendet und nicht gespeichert.</p>
         </div>
 
         <h2 class="section-header">Kalender-Link (iCal)</h2>
@@ -130,13 +222,6 @@
         </div>
         <p class="footnote">Erneuern macht den alten Link ungültig. Danach in Apple Kalender neu abonnieren.</p>
 
-        <div id="admin-entry" hidden>
-          <h2 class="section-header">Admin</h2>
-          <div class="group">
-            <button id="btn-admin" class="row row-nav"><span>Nutzungsübersicht</span><svg class="chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
-          </div>
-        </div>
-
         <div class="group group-spaced">
           <button id="btn-logout" class="row row-btn">Abmelden</button>
           <button id="btn-delete" class="row row-btn danger">Konto und Daten löschen</button>
@@ -144,58 +229,61 @@
         <p class="footnote center">Studo+ ist ein privates Projekt und nicht offiziell mit einer Hochschule verbunden.</p>
       </section>
 
-      <section id="tab-admin" class="tab" hidden>
-        <button class="back" id="admin-back"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>Einstellungen</button>
-        <div class="large-title"><h1>Nutzung</h1><p class="subtitle" id="admin-updated"></p></div>
-        <div class="stats" id="admin-stats"></div>
-        <h2 class="section-header">Letzte 14 Tage</h2>
-        <div class="group chart-box">
-          <div class="chart" id="admin-chart"></div>
-          <div class="legend"><span class="dot dot-a"></span>App geöffnet <span class="dot dot-b"></span>Kalender-Abrufe</div>
-        </div>
-        <h2 class="section-header">Hochschulen</h2>
-        <div class="group" id="admin-unis"></div>
-        <h2 class="section-header">Konten</h2>
-        <div class="group" id="admin-users"></div>
+      <!-- Persönliche Daten (Unterseite der Einstellungen) -->
+      <section id="tab-profile" class="tab" hidden>
+        <button class="back" data-back="settings"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>Einstellungen</button>
+        <div class="large-title"><h1>Persönliche Daten</h1></div>
+        <form id="profile-form" class="group">
+          <label class="row"><span class="row-label">Name</span><input name="name" autocomplete="name" placeholder="Vor- und Nachname"></label>
+          <label class="row"><span class="row-label">Matrikelnr.</span><input name="matrikel" inputmode="numeric" placeholder="12345678"></label>
+          <div class="row"><span class="row-label">Hochschule</span><span class="muted" id="profile-uni"></span></div>
+          <button class="row row-btn" type="submit">Speichern</button>
+        </form>
+        <p class="footnote" id="profile-hint">Bei der JKU wird der Name beim Login automatisch aus KUSSS übernommen.</p>
+
+        <h2 class="section-header">Studienrichtungen</h2>
+        <div class="group" id="program-list"></div>
+        <form id="program-form" class="group group-gap">
+          <label class="row"><span class="row-label">Studium</span><input name="name" placeholder="z. B. Bachelor Informatik" required></label>
+          <label class="row"><span class="row-label">Kennzahl</span><input name="code" placeholder="z. B. UK 033 521"></label>
+          <label class="row"><span class="row-label">ECTS-Ziel</span><input name="ects_target" inputmode="numeric" placeholder="180"></label>
+          <button class="row row-btn" type="submit">Studienrichtung hinzufügen</button>
+        </form>
+        <p class="footnote">ECTS und Notenschnitt werden pro Studienrichtung berechnet. Noten ordnest du im Tab Studium zu.</p>
       </section>
     </main>
 
     <nav class="tabbar">
-      <button data-tab="today" class="active" aria-label="Heute">
+      <button data-tab="today" class="active">
         <svg class="i-off" viewBox="0 0 24 24"><path d="M4 10.8 12 4l8 6.8V19a1.5 1.5 0 0 1-1.5 1.5H15v-5.5H9v5.5H5.5A1.5 1.5 0 0 1 4 19z"/></svg>
         <svg class="i-on" viewBox="0 0 24 24"><path class="fill" d="M4 10.8 12 4l8 6.8V19a1.5 1.5 0 0 1-1.5 1.5H15v-5.5H9v5.5H5.5A1.5 1.5 0 0 1 4 19z"/></svg>
         Heute</button>
-      <button data-tab="calendar" aria-label="Kalender">
+      <button data-tab="calendar">
         <svg class="i-off" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15.5" rx="3"/><path d="M4 10h16M8.5 3v4M15.5 3v4"/></svg>
         <svg class="i-on" viewBox="0 0 24 24"><path class="fill" fill-rule="evenodd" d="M7 5h10a3 3 0 0 1 3 3v9.5a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zM5.8 10.2v7.3c0 .7.5 1.2 1.2 1.2h10c.7 0 1.2-.5 1.2-1.2v-7.3z"/><path d="M8.5 3v4M15.5 3v4"/></svg>
         Kalender</button>
-      <button data-tab="settings" aria-label="Einstellungen">
+      <button data-tab="courses">
+        <svg class="i-off" viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5zM4 20.5A2.5 2.5 0 0 0 6.5 23H20"/></svg>
+        <svg class="i-on" viewBox="0 0 24 24"><path class="fill" d="M6.5 2H20a1 1 0 0 1 1 1v15a1 1 0 0 1-1 1H6.5a1.5 1.5 0 0 0 0 3H20a1 1 0 1 1 0 2H6.5A3.5 3.5 0 0 1 3 20.5v-15A3.5 3.5 0 0 1 6.5 2z"/></svg>
+        Kurse</button>
+      <button data-tab="study">
+        <svg class="i-off" viewBox="0 0 24 24"><path d="M2 9l10-5 10 5-10 5z"/><path d="M6 11v5c0 1.5 2.7 3 6 3s6-1.5 6-3v-5M22 9v6"/></svg>
+        <svg class="i-on" viewBox="0 0 24 24"><path class="fill" d="M12 3.5l10.5 5.2-10.5 5.3L1.5 8.7z"/><path class="fill" d="M6 11.6l6 3 6-3v4.4c0 1.8-2.9 3.5-6 3.5s-6-1.7-6-3.5z"/><path d="M22 9v6"/></svg>
+        Studium</button>
+      <button data-tab="settings">
         <svg class="i-off" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         <svg class="i-on" viewBox="0 0 24 24"><path class="fill" fill-rule="evenodd" d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1zM12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z"/></svg>
         Einstellungen</button>
     </nav>
   </div>
 
-  <template id="event-tpl">
-    <article class="card">
-      <div class="card-main">
-        <div class="card-bar"></div>
-        <div class="card-body">
-          <div class="card-time"></div>
-          <div class="card-title"></div>
-          <div class="card-loc"></div>
-        </div>
-      </div>
-      <label class="card-toggle"><span>Anwesenheitspflicht</span>
-        <input type="checkbox" class="switch" switch></label>
-      <div class="card-detail" hidden>
-        <span class="muted">Nur dieser Termin</span>
-        <div class="segmented">
-          <button data-v="inherit">Wie Kurs</button><button data-v="1">Ja</button><button data-v="0">Nein</button>
-        </div>
-      </div>
-    </article>
-  </template>
+  <!-- Bottom-Sheet für Details (Termin, Kurs, Formulare) -->
+  <div class="sheet-backdrop" id="sheet-backdrop" hidden></div>
+  <div class="sheet" id="sheet" role="dialog" aria-modal="true" hidden>
+    <div class="sheet-grabber"></div>
+    <div class="sheet-head"><h2 id="sheet-title"></h2><button class="text-btn" id="sheet-close">Fertig</button></div>
+    <div class="sheet-body" id="sheet-body"></div>
+  </div>
 
   <script src="/app.js" type="module"></script>
 </body>

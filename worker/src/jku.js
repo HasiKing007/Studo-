@@ -8,6 +8,7 @@
 const KUSSS = "https://www.kusss.jku.at";
 export const KUSSS_LOGIN = `${KUSSS}/kusss/login.action`;
 export const KUSSS_EXPORT = `${KUSSS}/kusss/ical-multi-form-sz.action`;
+export const KUSSS_GRADES = `${KUSSS}/kusss/gradeinfo.action`;
 const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
 const MAX_REDIRECTS = 15;
 const MAX_STEPS = 10;
@@ -104,6 +105,85 @@ export function describePage(page) {
     ...forms, !forms.length && `keine Formulare, ${page.html.length} Zeichen`].filter(Boolean).join("; ");
 }
 
+const text = (html) => decode(String(html).replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+
+/** Name aus der KUSSS-Kopfzeile "Vorname Nachname | Username: K12345678". */
+export function extractName(html) {
+  const m = text(html).match(/([A-ZÄÖÜ][\p{L}'.\- ]{2,80}?)\s*\|\s*Username\s*:/u);
+  return m ? m[1].trim() : null;
+}
+
+const GRADE_WORDS = [
+  [/nicht\s+genügend/i, 5], [/sehr\s+gut/i, 1], [/befriedigend/i, 3], [/genügend/i, 4], [/\bgut\b/i, 2],
+];
+
+/** Note aus KUSSS-Text: Zahl 1-5, Wort, oder Teilnahme-Beurteilung. */
+export function parseGrade(raw) {
+  const t = String(raw || "").trim();
+  const num = t.match(/(?:^|\()\s*([1-5])\s*(?:\)|$)/);
+  if (num) return { grade: +num[1], passed: +num[1] < 5 };
+  for (const [re, g] of GRADE_WORDS) if (re.test(t)) return { grade: g, passed: g < 5 };
+  if (/ohne\s+erfolg|nicht\s+bestanden|negativ/i.test(t)) return { grade: null, passed: false };
+  if (/mit\s+erfolg|bestanden|teilgenommen|positiv/i.test(t)) return { grade: null, passed: true };
+  return { grade: null, passed: null };
+}
+
+const num = (v) => { const m = String(v || "").replace(",", ".").match(/\d+(?:\.\d+)?/); return m ? +m[0] : null; };
+
+/** Datum "14.10.2026" -> "2026-10-14". */
+function isoDate(v) {
+  const m = String(v || "").match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+  return m ? `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : null;
+}
+
+/**
+ * Notenauskunft lesen. Spalten werden über ihre Überschriften erkannt (Datum, LVA/Titel, Typ,
+ * Note/Beurteilung, ECTS, SSt, Semester), damit kleine Layout-Änderungen nichts kaputt machen.
+ * Überschriften wie "Bachelorstudium Informatik" über einer Tabelle werden als Studium übernommen.
+ */
+export function parseGrades(html) {
+  const grades = [], programs = new Set();
+  const COLS = {
+    date: /datum/i, nr: /(lva-?nr|nummer|^nr)/i, kind: /typ/i, grade: /(note|beurteilung)/i,
+    ects: /ects/i, sws: /(sst|sws|semesterstunden)/i, semester: /semester/i,
+    title: /(titel|lehrveranstaltung|lva|prüfung|kurs|fach)/i,
+  };
+  const PROGRAM = /((?:Bachelor|Master|Diplom|Doktorats?|Lehramts?)[\p{L}-]*studium[^<|]{0,120}|(?:UG|UK|UC)\s?\d{3}\s?\d{0,3}[^<|]{0,120})/u;
+  let program = null, pos = 0;
+  for (const t of html.matchAll(/<table\b[\s\S]*?<\/table>/gi)) {
+    const before = html.slice(pos, t.index);
+    pos = t.index + t[0].length;
+    const progs = [...text(before).matchAll(new RegExp(PROGRAM.source, "gu"))];
+    if (progs.length) { program = progs.at(-1)[1].trim().replace(/\s*[:–-]\s*$/, ""); }
+
+    const rows = [...t[0].matchAll(/<tr\b[\s\S]*?<\/tr>/gi)].map((r) =>
+      [...r[0].matchAll(/<t([hd])\b[^>]*>([\s\S]*?)<\/t\1>/gi)].map((c) => text(c[2])));
+    const headIdx = rows.findIndex((r) => r.some((c) => COLS.grade.test(c)) && r.some((c) => COLS.ects.test(c) || COLS.title.test(c)));
+    if (headIdx < 0) continue;
+    const head = rows[headIdx];
+    const col = {};
+    for (const [key, re] of Object.entries(COLS)) {
+      const i = head.findIndex((c, idx) => re.test(c) && !Object.values(col).includes(idx));
+      if (i >= 0) col[key] = i;
+    }
+    for (const r of rows.slice(headIdx + 1)) {
+      if (r.length < 3 || col.grade === undefined || !r[col.grade]) continue;
+      const titleCell = r[col.title] ?? "";
+      const nr = (r[col.nr] || titleCell).match(/\b\d{3}\.\w{3}\b/)?.[0] || null;
+      const g = parseGrade(r[col.grade]);
+      const title = titleCell.replace(/\b\d{3}\.\w{3}\b/, "").replace(/^[\s,/|-]+|[\s,/|-]+$/g, "") || titleCell;
+      if (!title) continue;
+      grades.push({
+        date: isoDate(r[col.date]), nr, title, kind: (r[col.kind] || "").match(/\b[A-Z]{2}\b/)?.[0] || null,
+        grade_text: r[col.grade], grade: g.grade, passed: g.passed,
+        ects: num(r[col.ects]), sws: num(r[col.sws]), semester: r[col.semester] || null, program,
+      });
+      if (program) programs.add(program);
+    }
+  }
+  return { grades, programs: [...programs] };
+}
+
 const CAL_LINK = /(?:https?|webcal):\/\/[^\s"'<>]*?(?:published-calendar|ical|calendar)[^\s"'<>]*?token=[^\s"'<>]+/i;
 
 /** Abo-Link aus der Terminexport-Seite (falls schon angelegt). */
@@ -172,7 +252,7 @@ export class JkuSession {
     for (let step = 0; step < MAX_STEPS; step++) {
       const host = new URL(page.url).hostname;
       if (host.endsWith("kusss.jku.at") && !/login/i.test(new URL(page.url).pathname) && /logout/i.test(page.html)) {
-        return { status: "ok" };
+        return { status: "ok", name: extractName(page.html) };
       }
       const forms = parseForms(page.html);
 
@@ -213,7 +293,7 @@ export class JkuSession {
       }
       break;
     }
-    if (sentCredentials && /logout/i.test(page.html)) return { status: "ok" };
+    if (sentCredentials && /logout/i.test(page.html)) return { status: "ok", name: extractName(page.html) };
     const detail = describePage(page);
     console.warn("JKU-Login unerwartet:", detail, "| Verlauf:", this.trace.join(" | "));
     return {
@@ -221,6 +301,19 @@ export class JkuSession {
       message: `Der JKU-Login hat sich unerwartet verhalten. Bitte den Kalender-Link manuell einfügen. ` +
         `Diagnose: ${detail}. Verlauf: ${this.trace.slice(-8).join(" | ")}`,
     };
+  }
+
+  /** Notenauskunft holen und lesen. */
+  async grades() {
+    let page = await this.request(KUSSS_GRADES);
+    let r = parseGrades(page.html);
+    if (!r.grades.length) {
+      // Falls sich die Adresse geändert hat: dem Menüpunkt "Notenauskunft" folgen
+      const a = page.html.match(/<a\b[^>]*href="([^"]+)"[^>]*>\s*Notenauskunft/i);
+      if (a) { page = await this.request(new URL(decode(a[1]), page.url).toString(), { referer: page.url }); r = parseGrades(page.html); }
+    }
+    if (!r.grades.length) r.error = `Notenauskunft nicht erkannt (${describePage(page)})`;
+    return r;
   }
 
   /** Persönlichen Abo-Link holen; legt ihn über "Create" an, falls es noch keinen gibt. */
@@ -247,14 +340,20 @@ export class JkuSession {
 }
 
 /** Kompletter Ablauf: Login + Abo-Link. Wirft nie, liefert immer ein Ergebnis-Objekt. */
-export async function jkuConnect(username, password, fetchImpl) {
+export async function jkuConnect(username, password, fetchImpl, { calendar = true, grades = true } = {}) {
   const s = new JkuSession(fetchImpl);
   try {
     const r = await s.login(username, password);
     if (r.status !== "ok") return r;
-    let icalUrl = null;
-    try { icalUrl = await s.calendarLink(); } catch (e) { console.warn("Terminexport:", e.message); }
-    return { status: "ok", icalUrl };
+    const out = { status: "ok", name: r.name || null, icalUrl: null, grades: null };
+    if (calendar) {
+      try { out.icalUrl = await s.calendarLink(); } catch (e) { console.warn("Terminexport:", e.message); }
+    }
+    if (grades) {
+      try { out.grades = await s.grades(); } catch (e) { out.grades = { grades: [], programs: [], error: e.message }; }
+      if (out.grades.error) console.warn("Notenauskunft:", out.grades.error);
+    }
+    return out;
   } catch (e) {
     return { status: "unavailable", message: `JKU nicht erreichbar (${e.message}).` };
   }

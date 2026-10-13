@@ -7,7 +7,7 @@ import { buildCalendar, parseICS } from "./ical.js";
 import { formatRoom, parseRoom } from "./rooms.js";
 import { demoEvents } from "./demo.js";
 import { jkuConnect } from "./jku.js";
-import { UNIS, adminSet } from "./unis.js";
+import { UNIS, matrikel } from "./unis.js";
 import { error, hashPassword, json, parseSession, randomToken, sha256, timingSafeEqual, verifyPassword } from "./util.js";
 
 const SYNC_MINUTES = 30;
@@ -28,6 +28,19 @@ CREATE INDEX IF NOT EXISTS idx_events_start ON events(start);
 CREATE TABLE IF NOT EXISTS course_settings (course_id TEXT PRIMARY KEY, attendance INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS event_overrides (uid TEXT PRIMARY KEY, attendance INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
+-- Kursübersicht bleibt erhalten, auch wenn alte Termine aufgeräumt werden (Semesterfilter)
+CREATE TABLE IF NOT EXISTS courses (
+  course_id TEXT PRIMARY KEY, title TEXT NOT NULL, nr TEXT, kinds TEXT,
+  first_start TEXT NOT NULL, last_end TEXT NOT NULL, semesters TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS programs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, code TEXT, ects_target REAL, source TEXT NOT NULL DEFAULT 'manual'
+);
+CREATE TABLE IF NOT EXISTS grades (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE, date TEXT, nr TEXT, title TEXT NOT NULL, kind TEXT,
+  grade_text TEXT, grade INTEGER, passed INTEGER, ects REAL, sws REAL, semester TEXT,
+  program_id INTEGER, source TEXT NOT NULL DEFAULT 'manual', updated_at TEXT NOT NULL
+);
 `;
 
 const EFFECTIVE = `
@@ -36,6 +49,23 @@ SELECT e.*, COALESCE(o.attendance, cs.attendance, 0) AS attendance,
 FROM events e
 LEFT JOIN event_overrides o ON o.uid = e.uid
 LEFT JOIN course_settings cs ON cs.course_id = e.course_id`;
+
+const viennaMonthYear = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Vienna", year: "numeric", month: "2-digit" });
+
+/** Semester eines Datums: Okt–Feb = Wintersemester ("WS 2026/27"), März–Sept = Sommersemester ("SS 2027"). */
+export function semesterOf(date) {
+  const parts = Object.fromEntries(viennaMonthYear.formatToParts(new Date(date)).map((p) => [p.type, p.value]));
+  const y = +parts.year, m = +parts.month;
+  if (m >= 10) return `WS ${y}/${String(y + 1).slice(2)}`;
+  if (m <= 2) return `WS ${y - 1}/${String(y).slice(2)}`;
+  return `SS ${y}`;
+}
+
+/** Sortierschlüssel für Semester (neueste zuerst sortierbar). */
+export function semesterKey(sem) {
+  const m = String(sem).match(/(WS|SS)\s*(\d{4})/);
+  return m ? +m[2] * 2 + (m[1] === "WS" ? 1 : 0) : 0;
+}
 
 export class StudoStore extends DurableObject {
   constructor(ctx, env) {
@@ -148,12 +178,86 @@ export class StudoStore extends DurableObject {
         stats.cancelled++;
       }
     }
+    this.updateCourses(events);
     // Aufräumen: Termine, die älter als ein Semester sind
     this.sql.exec(`DELETE FROM events WHERE "end" < ?`, new Date(now - 180 * 86400_000).toISOString());
 
     this.setSetting("last_sync", stamp);
     this.setSetting("last_sync_error", null);
     return stats;
+  }
+
+  updateCourses(events) {
+    const byCourse = new Map();
+    for (const e of events) {
+      if (e.cancelled) continue;
+      const c = byCourse.get(e.courseId) || { title: e.title, nr: /^\d{3}\.\w{3}$/.test(e.courseId) ? e.courseId : null, kinds: new Set(), sems: new Set(), first: e.start, last: e.end };
+      if (e.kind) c.kinds.add(e.kind);
+      c.sems.add(semesterOf(e.start));
+      if (e.start < c.first) c.first = e.start;
+      if (e.end > c.last) c.last = e.end;
+      byCourse.set(e.courseId, c);
+    }
+    for (const [id, c] of byCourse) {
+      const old = this.sql.exec("SELECT kinds, semesters, first_start, last_end FROM courses WHERE course_id=?", id).toArray()[0];
+      const kinds = new Set([...(old?.kinds ? old.kinds.split(",") : []), ...c.kinds]);
+      const sems = new Set([...(old?.semesters ? old.semesters.split(",") : []), ...c.sems]);
+      const first = old && old.first_start < c.first.toISOString() ? old.first_start : c.first.toISOString();
+      const last = old && old.last_end > c.last.toISOString() ? old.last_end : c.last.toISOString();
+      this.sql.exec(`INSERT INTO courses(course_id, title, nr, kinds, first_start, last_end, semesters) VALUES(?,?,?,?,?,?,?)
+        ON CONFLICT(course_id) DO UPDATE SET title=excluded.title, nr=excluded.nr, kinds=excluded.kinds,
+        first_start=excluded.first_start, last_end=excluded.last_end, semesters=excluded.semesters`,
+        id, c.title, c.nr, [...kinds].join(","), first, last, [...sems].join(","));
+    }
+  }
+
+  // ---------- Noten & Studien ----------
+
+  /** Ergebnis der KUSSS-Notenauskunft übernehmen (manuelle Einträge bleiben unberührt). */
+  storeGrades(result) {
+    if (!result) return;
+    if (result.error && !result.grades.length) { this.setSetting("grades_error", result.error); return; }
+    const now = new Date().toISOString();
+    const programIds = {};
+    for (const name of result.programs) {
+      let row = this.sql.exec("SELECT id FROM programs WHERE name=?", name).toArray()[0];
+      if (!row) {
+        this.sql.exec("INSERT INTO programs(name, source) VALUES(?, 'kusss')", name);
+        row = this.sql.exec("SELECT id FROM programs WHERE name=?", name).toArray()[0];
+      }
+      programIds[name] = row.id;
+    }
+    this.sql.exec("DELETE FROM grades WHERE source='kusss'");
+    for (const g of result.grades) {
+      const key = [g.nr, g.title, g.kind, g.date, g.grade_text].join("|");
+      this.sql.exec(`INSERT INTO grades(key, date, nr, title, kind, grade_text, grade, passed, ects, sws, semester, program_id, source, updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?, 'kusss', ?) ON CONFLICT(key) DO NOTHING`,
+        key, g.date, g.nr, g.title, g.kind, g.grade_text, g.grade, g.passed === null ? null : g.passed ? 1 : 0,
+        g.ects, g.sws, g.semester || (g.date ? semesterOf(g.date) : null), g.program ? programIds[g.program] ?? null : null, now);
+    }
+    this.setSetting("grades_synced", now);
+    this.setSetting("grades_error", null);
+  }
+
+  /** Ergebnis eines erfolgreichen JKU-Logins übernehmen: Name, Kalender-Link, Noten. */
+  applyJku(r) {
+    if (r.name) this.setSetting("kusss_name", r.name);
+    if (r.icalUrl && (this.getSetting("ical_source") !== "manual" || !this.getSetting("ical_url"))) {
+      this.setSetting("ical_url", r.icalUrl);
+      this.setSetting("ical_source", "auto");
+    }
+    this.storeGrades(r.grades);
+  }
+
+  gradesPayload() {
+    const grades = this.sql.exec("SELECT * FROM grades ORDER BY COALESCE(date, '') DESC, title").toArray()
+      .map((g) => ({ ...g, passed: g.passed === null ? null : !!g.passed }));
+    const programs = this.sql.exec("SELECT * FROM programs ORDER BY id").toArray();
+    return {
+      grades, programs,
+      synced: this.getSetting("grades_synced"), error: this.getSetting("grades_error"),
+      auto: this.uni.auth === "jku",
+    };
   }
 
   // ---------- Auth (RPC aus dem Worker) ----------
@@ -187,10 +291,8 @@ export class StudoStore extends DurableObject {
           // Erstmals echt bestätigt: ein evtl. vorher von jemand anderem angelegtes Konto übernehmen
           this.sql.exec("DELETE FROM sessions");
         }
-        if (r.icalUrl && (this.getSetting("ical_source") !== "manual" || !this.getSetting("ical_url"))) {
-          this.setSetting("ical_url", r.icalUrl);
-          this.setSetting("ical_source", "auto");
-        } else if (!r.icalUrl && !this.getSetting("ical_url")) {
+        this.applyJku(r);
+        if (!this.getSetting("ical_url")) {
           notice = "Angemeldet, aber der KUSSS-Kalenderlink wurde nicht gefunden. Bitte in den Einstellungen manuell einfügen.";
         }
       } else {
@@ -284,7 +386,8 @@ export class StudoStore extends DurableObject {
     return {
       username: this.getSetting("username"),
       uni: { id: uniId, name: this.uni.name, auto: this.uni.auth === "jku", ical_hint: this.uni.icalHint },
-      admin: adminSet(this.env).has(this.key),
+      name: this.getSetting("display_name") || this.getSetting("kusss_name"),
+      matrikel: this.getSetting("matrikel") || matrikel(uniId, this.getSetting("username")),
       verified: this.getSetting("verified") === "1",
       demo: this.env.DEMO === "1",
       connected: !!this.getSetting("ical_url") || this.env.DEMO === "1",
@@ -358,8 +461,8 @@ export class StudoStore extends DurableObject {
       if (r.status === "invalid") { this.failures.push(Date.now()); return error(401, `JKU-Login abgelehnt: ${r.message}`); }
       if (r.status !== "ok") return error(502, r.message);
       if (!r.icalUrl) return error(502, "Angemeldet, aber in KUSSS wurde kein Kalender-Abo-Link gefunden.");
-      this.setSetting("ical_url", r.icalUrl);
-      this.setSetting("ical_source", "auto");
+      this.setSetting("ical_source", null);
+      this.applyJku(r);
       this.setSetting("verified", "1");
       this.setSetting("login_notice", null);
       try { return json(await this.sync()); } catch (e) { return error(502, `Sync fehlgeschlagen: ${e.message}`); }
@@ -393,11 +496,86 @@ export class StudoStore extends DurableObject {
     }
 
     if (path === "/api/courses" && method === "GET") {
-      const rows = this.sql.exec(`SELECT e.course_id, e.title, GROUP_CONCAT(DISTINCT e.kind) AS kinds, COUNT(*) AS n,
-          COALESCE(cs.attendance, 0) AS attendance
-        FROM events e LEFT JOIN course_settings cs ON cs.course_id = e.course_id
-        GROUP BY e.course_id ORDER BY e.title`).toArray();
-      return json(rows.map((r) => ({ course_id: r.course_id, title: r.title, kinds: r.kinds, events: r.n, attendance: !!r.attendance })));
+      const now = new Date().toISOString();
+      const rows = this.sql.exec(`SELECT c.*, COALESCE(cs.attendance, 0) AS attendance,
+          (SELECT COUNT(*) FROM events e WHERE e.course_id = c.course_id AND e.status='confirmed') AS n,
+          (SELECT MIN(e.start) FROM events e WHERE e.course_id = c.course_id AND e.status='confirmed' AND e.start > ?) AS next_start
+        FROM courses c LEFT JOIN course_settings cs ON cs.course_id = c.course_id ORDER BY c.title`, now).toArray();
+      const courses = rows.map((r) => ({
+        course_id: r.course_id, title: r.title, nr: r.nr, kinds: r.kinds, events: r.n, next_start: r.next_start,
+        first_start: r.first_start, last_end: r.last_end,
+        semesters: r.semesters ? r.semesters.split(",") : [], attendance: !!r.attendance,
+      }));
+      const semesters = [...new Set(courses.flatMap((c) => c.semesters))].sort((a, b) => semesterKey(b) - semesterKey(a));
+      return json({ courses, semesters, current: semesterOf(new Date()) });
+    }
+
+    if (path === "/api/profile" && method === "PUT") {
+      const body = await request.json().catch(() => ({}));
+      if (typeof body.name === "string") this.setSetting("display_name", body.name.trim().slice(0, 80) || null);
+      if (typeof body.matrikel === "string") this.setSetting("matrikel", body.matrikel.trim().slice(0, 20) || null);
+      return json(this.me(url.origin));
+    }
+
+    if (path === "/api/grades" && method === "GET") return json(this.gradesPayload());
+
+    if (path === "/api/grades/refresh" && method === "POST") {
+      if (this.uni.auth !== "jku") return error(400, "Automatische Noten gibt es nur für die JKU.");
+      if (this.accountLocked()) return error(429, "Zu viele Fehlversuche. Bitte in 15 Minuten erneut probieren.");
+      const { password } = await request.json().catch(() => ({}));
+      const r = await jkuConnect(this.getSetting("username"), String(password || ""), undefined, { calendar: false });
+      if (r.status === "invalid") { this.failures.push(Date.now()); return error(401, `JKU-Login abgelehnt: ${r.message}`); }
+      if (r.status !== "ok") return error(502, r.message);
+      this.applyJku(r);
+      return json(this.gradesPayload());
+    }
+
+    if (path === "/api/grades" && method === "POST") {
+      const b = await request.json().catch(() => ({}));
+      const title = String(b.title || "").trim().slice(0, 120);
+      if (!title) return error(422, "Titel angeben.");
+      const grade = [1, 2, 3, 4, 5].includes(+b.grade) ? +b.grade : null;
+      const ects = Number.isFinite(+b.ects) && +b.ects >= 0 && +b.ects <= 60 ? +b.ects : null;
+      const date = /^\d{4}-\d{2}-\d{2}$/.test(b.date || "") ? b.date : null;
+      const passed = grade ? grade < 5 : b.passed === false ? 0 : 1;
+      this.sql.exec(`INSERT INTO grades(date, title, kind, grade_text, grade, passed, ects, semester, program_id, source, updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?, 'manual', ?)`, date, title, b.kind ? String(b.kind).slice(0, 4) : null,
+        grade ? String(grade) : passed ? "mit Erfolg" : "ohne Erfolg", grade, passed ? 1 : 0, ects,
+        date ? semesterOf(date) : null, b.program_id ? +b.program_id : null, new Date().toISOString());
+      return json(this.gradesPayload());
+    }
+
+    const gradeId = path.match(/^\/api\/grades\/(\d+)$/);
+    if (gradeId && method === "PUT") {
+      const b = await request.json().catch(() => ({}));
+      if ("program_id" in b) this.sql.exec("UPDATE grades SET program_id=? WHERE id=?", b.program_id ? +b.program_id : null, +gradeId[1]);
+      return json(this.gradesPayload());
+    }
+    if (gradeId && method === "DELETE") {
+      this.sql.exec("DELETE FROM grades WHERE id=? AND source='manual'", +gradeId[1]);
+      return json(this.gradesPayload());
+    }
+
+    if (path === "/api/programs" && method === "POST") {
+      const b = await request.json().catch(() => ({}));
+      const name = String(b.name || "").trim().slice(0, 120);
+      if (!name) return error(422, "Name der Studienrichtung angeben.");
+      this.sql.exec("INSERT INTO programs(name, code, ects_target) VALUES(?,?,?)", name,
+        b.code ? String(b.code).slice(0, 20) : null, +b.ects_target > 0 ? +b.ects_target : null);
+      return json(this.gradesPayload());
+    }
+    const programId = path.match(/^\/api\/programs\/(\d+)$/);
+    if (programId && method === "PUT") {
+      const b = await request.json().catch(() => ({}));
+      if (typeof b.name === "string" && b.name.trim()) this.sql.exec("UPDATE programs SET name=? WHERE id=?", b.name.trim().slice(0, 120), +programId[1]);
+      if ("code" in b) this.sql.exec("UPDATE programs SET code=? WHERE id=?", b.code ? String(b.code).slice(0, 20) : null, +programId[1]);
+      if ("ects_target" in b) this.sql.exec("UPDATE programs SET ects_target=? WHERE id=?", +b.ects_target > 0 ? +b.ects_target : null, +programId[1]);
+      return json(this.gradesPayload());
+    }
+    if (programId && method === "DELETE") {
+      this.sql.exec("UPDATE grades SET program_id=NULL WHERE program_id=?", +programId[1]);
+      this.sql.exec("DELETE FROM programs WHERE id=?", +programId[1]);
+      return json(this.gradesPayload());
     }
 
     const course = path.match(/^\/api\/courses\/(.+)\/attendance$/);
