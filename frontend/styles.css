@@ -342,7 +342,7 @@ input.switch { accent-color: var(--green); width: 51px; height: 31px; margin: 0;
 }
 .page.in { transform: none; }
 .page.under { transform: translate3d(-28%, 0, 0); }
-.page.dragging { transition: none; }
+.page.no-anim { transition: none; }
 .page-shade { position: fixed; inset: 0; z-index: 19; background: rgba(0, 0, 0, .08); opacity: 0; transition: opacity .45s var(--ios); pointer-events: none; }
 .page-shade.on { opacity: 1; }
 .navbar {
@@ -422,3 +422,8 @@ html, body { overscroll-behavior-x: none; }
 @keyframes splash-zoom { to { transform: scale(1.06); opacity: 0; } }
 @keyframes splash-fade { to { opacity: 0; visibility: hidden; } }
 .reveal { transition: opacity .5s ease .12s; }
+/* Laufendes Semester im Diagramm: heller, Beschriftung in Akzentfarbe */
+.chart .col.current .bar-a { background: color-mix(in srgb, var(--accent) 40%, var(--card)); min-height: 3px; }
+.chart .col.current .lbl { color: var(--accent); font-weight: 600; }
+/* Beim Wischen zwischen Tabs/Tagen soll der Inhalt nicht über die Ränder hinaus sichtbar sein */
+#app main, #tab-calendar { overflow-x: clip; }

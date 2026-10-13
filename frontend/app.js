@@ -167,18 +167,27 @@ function makeSwitch(checked, onChange) {
 }
 
 // ---------- Unterseiten: Push-Navigation wie in iOS, mit Browser-Zurück ----------
+// Verlauf ist immer genau [Sperre, Tab, Seite 1, …, Seite n] ohne Einträge "nach vorne":
+// Zurück-Wischen geht so nur aus Unterseiten heraus, nie zu einem früheren Tab oder aus der App,
+// und Vorwärts-Wischen öffnet keine alten Seiten wieder.
 const stack = [];
 const shade = el("div", "page-shade");
 document.body.append(shade);
-history.replaceState({ depth: 0 }, "");
+let navLockUntil = 0, ownBack = false, settling = false;
+const navLocked = () => Date.now() < navLockUntil;
+const lockNav = (ms = 480) => { navLockUntil = Date.now() + ms; };
+history.replaceState({ depth: -1 }, "");
+history.pushState({ depth: 0 }, "");
 
 function pushPage(title, build, { head = true } = {}) {
+  if (navLocked()) return null; // Doppeltipp öffnet nicht zwei Seiten übereinander
+  lockNav();
   const prevTitle = stack.length ? stack[stack.length - 1].title : TAB_TITLES[state.tab];
   const page = el("div", "page");
   const bar = el("div", "navbar");
   const back = el("button", "back");
   back.append(svg('<path d="M15 5l-7 7 7 7"/>'), el("span", "", prevTitle));
-  back.addEventListener("click", () => history.back());
+  back.addEventListener("click", goBack);
   bar.append(back, el("div", "navbar-title", title), el("div"));
   const body = el("div", "page-body");
   page.append(bar, body);
@@ -186,56 +195,61 @@ function pushPage(title, build, { head = true } = {}) {
   const entry = { page, title, body, build };
   build(body, entry);
   page.addEventListener("scroll", () => page.classList.toggle("scrolled", page.scrollTop > 30), { passive: true });
-  enableEdgeSwipe(page);
   $("#pages").append(page);
   stack.at(-1)?.page.classList.add("under");
   stack.push(entry);
   shade.classList.add("on");
   document.body.classList.add("locked");
+  // Während des Hereinschiebens keine Tipps annehmen (zweiter Tipp eines Doppeltipps landet sonst auf der neuen Seite)
+  page.style.pointerEvents = "none";
+  setTimeout(() => { page.style.pointerEvents = ""; }, 450);
   requestAnimationFrame(() => requestAnimationFrame(() => page.classList.add("in")));
   history.pushState({ depth: stack.length }, "");
   return entry;
 }
+function goBack() {
+  if (!stack.length || navLocked()) return;
+  lockNav(); ownBack = true; history.back();
+}
 function refreshPage(entry) { entry.body.replaceChildren(); entry.build(entry.body, entry); }
-function popTop() {
+function popTop(animate = true) {
   const top = stack.pop();
   if (!top) return;
-  top.page.style.transform = "";
-  top.page.classList.remove("in", "dragging");
-  setTimeout(() => top.page.remove(), 460);
+  if (animate) {
+    top.page.classList.remove("in");
+    setTimeout(() => top.page.remove(), 460);
+  } else top.page.remove(); // System-Wischgeste hat schon animiert
   const prev = stack.at(-1);
-  if (prev) { prev.page.classList.remove("under"); if (prev.refresh) prev.refresh(); }
-  else { shade.classList.remove("on"); document.body.classList.toggle("locked", state.tab === "calendar"); renderTab(state.tab); }
+  if (prev) {
+    if (!animate) prev.page.classList.add("no-anim");
+    prev.page.classList.remove("under");
+    if (!animate) requestAnimationFrame(() => prev.page.classList.remove("no-anim"));
+    if (prev.refresh) prev.refresh();
+  }
+  else { shade.classList.remove("on"); document.body.classList.toggle("locked", state.tab === "calendar"); for (const w of weekCache.values()) w.at = 0; renderTab(state.tab); }
 }
 addEventListener("popstate", (e) => {
-  const depth = e.state?.depth || 0;
-  while (stack.length > depth) popTop();
+  const depth = e.state?.depth ?? -1;
+  if (settling) {
+    // Wieder bei der Sperre angekommen: Tab + offene Seiten neu eintragen, Vorwärts-Verlauf ist damit weg
+    if (depth !== -1) return;
+    settling = false;
+    for (let d = 0; d <= stack.length; d++) history.pushState({ depth: d }, "");
+    return;
+  }
+  const animate = ownBack;
+  ownBack = false;
+  while (stack.length > Math.max(0, depth)) popTop(animate);
+  lockNav(animate ? 480 : 250);
+  settling = true;
+  if (depth === -1) { settling = false; history.pushState({ depth: 0 }, ""); }
+  else history.go(-(depth + 1));
 });
 function closeAllPages() {
+  const n = stack.length;
   while (stack.length) stack.pop().page.remove();
   shade.classList.remove("on"); document.body.classList.toggle("locked", state.tab === "calendar" && !$("#app").hidden);
-}
-
-// Wischen vom linken Rand zurück (nur als Home-Bildschirm-App; im Safari-Browser macht das Safari selbst)
-function enableEdgeSwipe(page) {
-  if (!navigator.standalone && !matchMedia("(display-mode: standalone)").matches) return;
-  let x0 = null, dx = 0, t0 = 0;
-  page.addEventListener("touchstart", (e) => {
-    if (e.touches[0].clientX > 28) return;
-    x0 = e.touches[0].clientX; dx = 0; t0 = Date.now(); page.classList.add("dragging");
-  }, { passive: true });
-  page.addEventListener("touchmove", (e) => {
-    if (x0 === null) return;
-    dx = Math.max(0, e.touches[0].clientX - x0);
-    page.style.transform = `translate3d(${dx}px,0,0)`;
-  }, { passive: true });
-  page.addEventListener("touchend", () => {
-    if (x0 === null) return;
-    x0 = null; page.classList.remove("dragging");
-    const fast = dx / Math.max(1, Date.now() - t0) > 0.5;
-    if (dx > innerWidth / 3 || (fast && dx > 40)) history.back();
-    else page.style.transform = "";
-  });
+  if (n) { settling = true; history.go(-(n + 1)); }
 }
 
 // Formular-Seite (Note hinzufügen, KUSSS-Passwort, Studienrichtung …)
@@ -261,7 +275,7 @@ function formPage(title, fields, submitLabel, onSubmit, footnote) {
     form.addEventListener("submit", async (e) => {
       e.preventDefault(); errP.textContent = ""; btn.disabled = true;
       const old = btn.textContent; btn.textContent = "Bitte warten …";
-      try { await onSubmit(Object.fromEntries(new FormData(form)), form); history.back(); }
+      try { await onSubmit(Object.fromEntries(new FormData(form)), form); navLockUntil = 0; goBack(); }
       catch (err) { errP.textContent = err.message; }
       finally { btn.disabled = false; btn.textContent = old; }
     });
@@ -399,6 +413,64 @@ function renderTab(name) {
   const run = { home: renderHome, calendar: renderCalendar, courses: renderCourses, study: renderStudy, settings: renderSettings }[name];
   if (run) Promise.resolve(run()).catch((err) => console.error(err));
 }
+// Waagrechtes Ziehen mit Richtungserkennung: senkrechtes Scrollen bleibt unberührt
+function hDrag(target, { canStart = () => true, onMove, onEnd }) {
+  let x0 = null, y0 = 0, t0 = 0, dir = null, dx = 0;
+  target.addEventListener("touchstart", (e) => {
+    if (e.touches.length !== 1 || !canStart(e)) { x0 = null; return; }
+    x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; t0 = Date.now(); dir = null; dx = 0;
+  }, { passive: true });
+  target.addEventListener("touchmove", (e) => {
+    if (x0 === null) return;
+    const mx = e.touches[0].clientX - x0, my = e.touches[0].clientY - y0;
+    if (!dir) {
+      if (Math.abs(mx) < 8 && Math.abs(my) < 8) return;
+      dir = Math.abs(mx) > Math.abs(my) * 1.2 ? "h" : "v";
+      if (dir === "v") { x0 = null; return; }
+    }
+    e.preventDefault();
+    dx = mx; onMove(dx);
+  }, { passive: false });
+  const end = () => {
+    if (x0 === null) return;
+    x0 = null;
+    if (dir === "h") onEnd(dx, dx / Math.max(1, Date.now() - t0));
+  };
+  target.addEventListener("touchend", end);
+  target.addEventListener("touchcancel", () => { if (x0 !== null && dir === "h") { x0 = null; onEnd(0, 0); } x0 = null; });
+}
+const EASE = "cubic-bezier(.25,.8,.25,1)";
+
+// Zwischen den Tabs wischen (nicht am Bildschirmrand: dort liegen die Gesten des Systems)
+const TABS = Object.keys(TAB_TITLES);
+hDrag($("#app main"), {
+  canStart: (e) => {
+    const x = e.touches[0].clientX;
+    return !stack.length && x > 22 && x < innerWidth - 22 && !e.target.closest(".chips, .links, #cal-view, input, select, textarea, .segmented, .switch, .ring, .chart");
+  },
+  onMove: (dx) => {
+    const i = TABS.indexOf(state.tab), tab = $(`#tab-${state.tab}`);
+    const edge = (dx > 0 && i === 0) || (dx < 0 && i === TABS.length - 1);
+    const d = edge ? dx * 0.2 : dx;
+    tab.style.transform = `translate3d(${d}px,0,0)`;
+    tab.style.opacity = String(1 - Math.min(0.5, Math.abs(d) / innerWidth));
+  },
+  onEnd: (dx, v) => {
+    const i = TABS.indexOf(state.tab), tab = $(`#tab-${state.tab}`);
+    const next = TABS[i + (dx < 0 ? 1 : -1)];
+    const commit = next && (Math.abs(dx) > innerWidth * 0.25 || (Math.abs(v) > 0.4 && Math.abs(dx) > 40));
+    const from = tab.style.transform, op = tab.style.opacity;
+    tab.style.transform = ""; tab.style.opacity = "";
+    if (!commit) { tab.animate([{ transform: from, opacity: op }, { transform: "none", opacity: 1 }], { duration: 220, easing: EASE }); return; }
+    const sign = dx < 0 ? -1 : 1;
+    haptic();
+    tab.animate([{ transform: from, opacity: op }, { transform: `translate3d(${sign * innerWidth * 0.45}px,0,0)`, opacity: 0 }], { duration: 140, easing: "ease-in" })
+      .finished.then(() => {
+        switchTab(next);
+        $(`#tab-${next}`).animate([{ transform: `translate3d(${-sign * 70}px,0,0)`, opacity: 0 }, { transform: "none", opacity: 1 }], { duration: 260, easing: EASE });
+      });
+  },
+});
 addEventListener("scroll", () => $$(".appbar").forEach((a) => a.classList.toggle("scrolled", scrollY > 40)), { passive: true });
 
 async function fetchEvents(from, to) {
@@ -536,20 +608,37 @@ $$("#cal-mode button").forEach((b) => b.addEventListener("click", () => {
 $("#cal-prev").addEventListener("click", () => moveCal(-1));
 $("#cal-next").addEventListener("click", () => moveCal(1));
 $("#cal-today").addEventListener("click", () => { state.cal.day = midnight(new Date()); state.cal.scrolled = ""; haptic(); renderCalendar(); });
-function moveCal(dir) { state.cal.day = addDays(state.cal.day, state.cal.mode === "day" ? dir : dir * 7); haptic(); renderCalendar(); }
+function moveCal(dir) { state.cal.day = addDays(state.cal.day, state.cal.mode === "day" ? dir : dir * 7); haptic(); return renderCalendar(); }
 
-// Wischen nach links/rechts blättert
-(() => {
-  let x0 = null, y0 = null;
-  const view = $("#cal-view");
-  view.addEventListener("touchstart", (e) => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
-  view.addEventListener("touchend", (e) => {
-    if (x0 === null) return;
-    const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0;
-    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) moveCal(dx < 0 ? 1 : -1);
-    x0 = null;
-  }, { passive: true });
-})();
+// Wochen-Cache: Blättern zeigt sofort an, aktualisiert wird im Hintergrund
+const weekCache = new Map();
+function weekEvents(ws, { fresh = 15000 } = {}) {
+  const k = ws.toISOString(), hit = weekCache.get(k);
+  if (hit && (Date.now() - hit.at < fresh || hit.pending)) return hit.pending || Promise.resolve(hit.events);
+  const pending = fetchEvents(ws, addDays(ws, 7)).then((events) => { weekCache.set(k, { events, at: Date.now() }); return events; })
+    .catch((err) => { if (hit) weekCache.set(k, hit); else weekCache.delete(k); throw err; });
+  weekCache.set(k, { ...(hit || {}), pending });
+  return pending;
+}
+
+// Wischen nach links/rechts blättert: Raster folgt dem Finger, neuer Tag schiebt nach
+hDrag($("#cal-view"), {
+  canStart: (e) => e.touches[0].clientX > 22 && e.touches[0].clientX < innerWidth - 22,
+  onMove: (dx) => { $("#cal-view").style.transform = `translate3d(${dx}px,0,0)`; },
+  onEnd: async (dx, v) => {
+    const view = $("#cal-view"), from = view.style.transform;
+    view.style.transform = "";
+    const commit = Math.abs(dx) > view.clientWidth * 0.22 || (Math.abs(v) > 0.35 && Math.abs(dx) > 30);
+    if (!commit) { view.animate([{ transform: from }, { transform: "none" }], { duration: 220, easing: EASE }); return; }
+    const sign = dx < 0 ? -1 : 1;
+    await view.animate([{ transform: from, opacity: 1 }, { transform: `translate3d(${sign * view.clientWidth}px,0,0)`, opacity: 0.3 }],
+      { duration: 160, easing: "ease-out" }).finished;
+    view.style.opacity = "0";
+    await moveCal(-sign);
+    view.style.opacity = "";
+    view.animate([{ transform: `translate3d(${-sign * view.clientWidth * 0.6}px,0,0)`, opacity: 0.3 }, { transform: "none", opacity: 1 }], { duration: 240, easing: EASE });
+  },
+});
 
 // Kalenderbereich füllt genau den Platz zwischen Kopf und Tab-Leiste: Kopf bleibt stehen, nur das Raster scrollt
 function sizeCalendar() {
@@ -557,9 +646,12 @@ function sizeCalendar() {
   if ($("#tab-calendar").hidden) return;
   const top = v.getBoundingClientRect().top + scrollY;
   const bottom = $(".tabbar").offsetHeight + 10;
-  v.style.height = `${Math.max(240, innerHeight - top - bottom)}px`;
+  // dvh passt sich selbst an, wenn Safari-Leisten oder Tastatur die Höhe ändern
+  v.style.height = `max(240px, calc(100dvh - ${Math.round(top + bottom)}px))`;
 }
 addEventListener("resize", sizeCalendar);
+visualViewport?.addEventListener("resize", sizeCalendar);
+addEventListener("pageshow", sizeCalendar);
 
 let calSeq = 0;
 async function renderCalendar() {
@@ -572,8 +664,16 @@ async function renderCalendar() {
 
   const view = $("#cal-view");
   let events;
-  try { events = await fetchEvents(ws, we); } catch (err) { errorBox(view, err); return; }
+  const cached = weekCache.get(ws.toISOString());
+  if (cached?.events && !cached.pending) {
+    events = cached.events;
+    if (Date.now() - cached.at > 15000) weekEvents(ws).then((fresh) => { if (seq === calSeq && JSON.stringify(fresh) !== JSON.stringify(events)) renderCalendar(); }).catch(() => {});
+  } else {
+    try { events = await weekEvents(ws); } catch (err) { errorBox(view, err); return; }
+  }
   if (seq !== calSeq) return; // inzwischen weitergeblättert
+  // Nachbarwochen vorladen, damit Wischen sofort reagiert
+  setTimeout(() => { weekEvents(addDays(ws, 7), { fresh: 60000 }).catch(() => {}); weekEvents(addDays(ws, -7), { fresh: 60000 }).catch(() => {}); }, 300);
   const byDay = events.reduce((m, e) => ((m[dayKey(new Date(e.start))] ??= []).push(e), m), {});
 
   const strip = $("#week-strip");
@@ -781,7 +881,11 @@ async function openCourse(id) {
 }
 
 // ---------- Tab: Studium (Noten, ECTS, Statistik) ----------
-function isPassed(g) { return g.passed !== false && g.grade !== 5; }
+function isPassed(g) { return g.grade ? g.grade <= 4 : g.passed === true; }
+function currentSemester(d = new Date()) {
+  const y = d.getFullYear(), m = d.getMonth() + 1;
+  return normSem(m >= 10 ? `${y}W` : m <= 2 ? `${y - 1}W` : `${y}S`);
+}
 function studyNumbers(grades, target) {
   const passed = grades.filter(isPassed);
   const ects = passed.reduce((s, g) => s + (+g.ects || 0), 0);
@@ -795,7 +899,8 @@ function gradePill(g) {
   const pill = el("span", "grade-pill");
   if (g.grade) { pill.textContent = String(g.grade); if (g.grade === 5) pill.classList.add("fail"); }
   else if (g.passed === false) { pill.textContent = "✕"; pill.classList.add("fail"); }
-  else { pill.textContent = "✓"; pill.classList.add("ok"); }
+  else if (g.passed) { pill.textContent = "✓"; pill.classList.add("ok"); pill.title = "Mit Erfolg teilgenommen"; }
+  else { pill.textContent = "–"; pill.title = g.grade_text || "Noch keine Beurteilung"; }
   return pill;
 }
 
@@ -845,8 +950,13 @@ async function renderStudy() {
 
   const sems = {};
   for (const g of n.passed) if (g.semester) sems[g.semester] = (sems[g.semester] || 0) + (+g.ects || 0);
+  // Laufendes Semester immer zeigen, auch wenn noch keine Note da ist
+  const cur = currentSemester();
+  if (Object.keys(sems).length || grades.length) sems[cur] ??= 0;
   const semList = Object.entries(sems).sort((a, b) => semSort(a[0]) - semSort(b[0])).slice(-8);
-  const perSem = semList.length ? n.ects / semList.length : 0;
+  // Schnitt pro Semester nur über abgeschlossene Semester (das laufende würde ihn drücken)
+  const done = semList.filter(([s]) => semSort(s) < semSort(cur));
+  const perSem = done.length ? done.reduce((a, [, v]) => a + v, 0) / done.length : semList.length ? n.ects / semList.length : 0;
   const stats = [
     [n.avg ? fmtAvg.format(n.avg) : "–", "Notenschnitt"],
     [n.plain ? fmtAvg.format(n.plain) : "–", "Schnitt ungewichtet"],
@@ -861,7 +971,8 @@ async function renderStudy() {
   chart.replaceChildren(...semList.map(([s, v]) => {
     const col = el("div", "col");
     const b = el("div", "bar bar-a"); b.style.height = `${(v / maxE) * 100}%`;
-    col.append(el("div", "val-lbl", fmtNum.format(v)), b, el("span", "lbl", semShort(s)));
+    if (s === cur) col.classList.add("current");
+    col.append(el("div", "val-lbl", fmtNum.format(v)), b, el("span", "lbl", s === cur ? "jetzt" : semShort(s)));
     return col;
   }));
   if (!semList.length) chart.replaceChildren(el("div", "chart-empty", "Noch keine Daten"));
@@ -885,6 +996,7 @@ async function renderStudy() {
     const ects = list.filter(isPassed).reduce((s, g) => s + (+g.ects || 0), 0);
     out.push(header(`${sem} · ${fmtNum.format(ects)} ECTS`), group(...list.map(gradeRow)));
   }
+  if (out.length) out.push(note("Rechts steht die Note. ✓ heißt „mit Erfolg teilgenommen“ (ohne Ziffernnote)."));
   $("#grade-list").replaceChildren(...out);
 }
 
@@ -928,7 +1040,7 @@ function openGrade(g) {
       const del = el("button", "row row-btn danger", "Note löschen");
       del.addEventListener("click", async () => {
         if (!confirm(`„${g.title}“ löschen?`)) return;
-        await api(`/api/grades/${g.id}`, { method: "DELETE" }); history.back();
+        await api(`/api/grades/${g.id}`, { method: "DELETE" }); navLockUntil = 0; goBack();
       });
       body.append(el("div", "group-spaced"), group(del));
     }
@@ -979,7 +1091,7 @@ function renderSettings() {
 
 $("#btn-sync").addEventListener("click", async () => {
   $("#btn-sync").textContent = "Wird aktualisiert …";
-  try { await post("/api/sync"); $("#sync-error").textContent = ""; }
+  try { await post("/api/sync"); weekCache.clear(); $("#sync-error").textContent = ""; }
   catch (err) { $("#sync-error").textContent = err.message; }
   $("#btn-sync").textContent = "Jetzt aktualisieren";
   await loadMe(); renderSettings();
@@ -1004,7 +1116,7 @@ function openConnection() {
       form.append(group(pw, btn), note("Studo+ meldet sich einmal bei KUSSS an. Das Passwort wird nicht gespeichert."), err);
       form.addEventListener("submit", async (e) => {
         e.preventDefault(); btn.textContent = "Verbinde mit KUSSS …"; btn.disabled = true; err.textContent = "";
-        try { await post("/api/jku/connect", { password: pw.value }); await loadMe(); state.gradesData = null; history.back(); }
+        try { await post("/api/jku/connect", { password: pw.value }); await loadMe(); state.gradesData = null; navLockUntil = 0; goBack(); }
         catch (x) { err.textContent = x.message; }
         btn.textContent = "Kalender, Noten und Name holen"; btn.disabled = false;
       });
@@ -1017,7 +1129,7 @@ function openConnection() {
     form.append(group(url, btn), note(me.uni.ical_hint), err);
     form.addEventListener("submit", async (e) => {
       e.preventDefault(); btn.textContent = "Wird geprüft …"; err.textContent = "";
-      try { await put("/api/settings", { ical_url: url.value }); await loadMe(); history.back(); }
+      try { await put("/api/settings", { ical_url: url.value }); await loadMe(); navLockUntil = 0; goBack(); }
       catch (x) { err.textContent = x.message; }
       btn.textContent = "Link speichern";
     });
@@ -1210,7 +1322,7 @@ function openProgramAdd() {
       if (!name) { err.textContent = "Bitte ein Studium wählen."; return; }
       try {
         state.gradesData = await post("/api/programs", { name, code: codeIn.value || null, ects_target: +ectsIn.value || null });
-        history.back();
+        navLockUntil = 0; goBack();
       } catch (x) { err.textContent = x.message; }
     });
     body.append(group(typeRow, facRow, progRow, nameRow, ectsRow, codeRow),
@@ -1234,7 +1346,7 @@ function openProgram(p) {
     const del = el("button", "row row-btn danger", "Studienrichtung entfernen");
     del.addEventListener("click", async () => {
       if (!confirm(`„${p.name}“ entfernen? Die Noten bleiben erhalten.`)) return;
-      state.gradesData = await api(`/api/programs/${p.id}`, { method: "DELETE" }); history.back();
+      state.gradesData = await api(`/api/programs/${p.id}`, { method: "DELETE" }); navLockUntil = 0; goBack();
     });
     body.append(group(r1, r2), el("div", "group-spaced"), group(del));
   });
