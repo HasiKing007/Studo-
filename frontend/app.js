@@ -177,6 +177,11 @@ function eventCard(ev) {
   return node;
 }
 
+// Fehler beim Laden sichtbar machen statt eine leere Seite zu zeigen
+function showLoadError(box, err) {
+  box.replaceChildren(el("p", "empty error-box", `Termine konnten nicht geladen werden: ${err.message}`));
+}
+
 async function fetchEvents(from, to) {
   return api(`/api/events?start=${encodeURIComponent(from.toISOString())}&end=${encodeURIComponent(to.toISOString())}`);
 }
@@ -191,11 +196,12 @@ function refreshCurrent() {
 async function renderToday() {
   const now = new Date();
   $("#today-date").textContent = fmtDay.format(now);
-  const notice = state.me.notice || (!state.me.connected ? "Noch kein Stundenplan verbunden. Tippe auf Einstellungen, um ihn einzurichten." : "");
+  const notice = state.me.notice || state.me.last_sync_error || (!state.me.connected ? "Noch kein Stundenplan verbunden. Tippe auf Einstellungen, um ihn einzurichten." : "");
   $("#notice").hidden = !notice; $("#notice").textContent = notice;
 
   const list = $("#today-list");
-  const events = await fetchEvents(now, addDays(startOfWeek(now), 14));
+  let events;
+  try { events = await fetchEvents(now, addDays(startOfWeek(now), 14)); } catch (err) { showLoadError(list, err); return; }
   const todays = events.filter((e) => dayKey(new Date(e.start)) === dayKey(now));
   list.replaceChildren();
   if (todays.length) {
@@ -236,7 +242,8 @@ $("#week-next").addEventListener("click", () => { state.weekStart = addDays(stat
 async function renderWeek() {
   const start = state.weekStart, end = addDays(start, 7);
   $("#week-label").textContent = `${fmtWeek.format(start)} – ${fmtWeek.format(addDays(start, 6))}`;
-  const events = await fetchEvents(start, end);
+  let events;
+  try { events = await fetchEvents(start, end); } catch (err) { showLoadError($("#calendar-list"), err); return; }
   const byDay = events.reduce((m, e) => ((m[dayKey(new Date(e.start))] ??= []).push(e), m), {});
 
   const strip = $("#week-strip"); strip.replaceChildren();
@@ -266,7 +273,8 @@ async function renderWeek() {
 
 async function renderCourses() {
   const box = $("#course-list");
-  const courses = await api("/api/courses");
+  let courses;
+  try { courses = await api("/api/courses"); } catch (err) { box.replaceChildren(el("div", "row error", err.message)); return; }
   box.replaceChildren();
   if (!courses.length) { box.append(el("div", "row muted", "Noch keine Kurse.")); return; }
   for (const c of courses) {
