@@ -98,8 +98,9 @@ export function findCalendarLink(html) {
 // ---------- Ablauf ----------
 
 export class JkuSession {
-  constructor(fetchImpl = fetch) {
-    this.fetch = fetchImpl;
+  constructor(fetchImpl = (...args) => fetch(...args)) {
+    // fetch nicht als Methode speichern: Workers verlangen beim Aufruf this === globalThis
+    this.fetchImpl = fetchImpl;
     this.jar = new CookieJar();
     this.url = null;
   }
@@ -111,7 +112,8 @@ export class JkuSession {
       if (cookie) headers.Cookie = cookie;
       if (referer) headers.Referer = referer;
       if (body) headers["Content-Type"] = "application/x-www-form-urlencoded";
-      const res = await this.fetch(url, { method, headers, body, redirect: "manual" });
+      const doFetch = this.fetchImpl;
+      const res = await doFetch(url, { method, headers, body, redirect: "manual" });
       const setCookies = res.headers.getSetCookie ? res.headers.getSetCookie() : [];
       this.jar.store(url, setCookies);
       const loc = res.headers.get("Location");
@@ -219,7 +221,7 @@ export class JkuSession {
 }
 
 /** Kompletter Ablauf: Login + Abo-Link. Wirft nie, liefert immer ein Ergebnis-Objekt. */
-export async function jkuConnect(username, password, fetchImpl = fetch) {
+export async function jkuConnect(username, password, fetchImpl) {
   const s = new JkuSession(fetchImpl);
   try {
     const r = await s.login(username, password);
