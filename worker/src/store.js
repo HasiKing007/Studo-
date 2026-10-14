@@ -60,9 +60,9 @@ LEFT JOIN event_overrides o ON o.uid = e.uid
 LEFT JOIN event_tags t ON t.uid = e.uid
 LEFT JOIN course_settings cs ON cs.course_id = e.course_id`;
 
-/** Art eines Termins: von Hand gesetzt, sonst aus dem Titel erkannt. */
+/** Art eines Termins: von Hand gesetzt, sonst aus Titel oder kurzer Notiz erkannt. */
 function eventTag(r) {
-  const auto = detectTag(r.title);
+  const auto = detectTag(r.title, r.description);
   const tag = r.tag_set === "none" ? null : r.tag_set || auto;
   return { tag, tag_auto: auto, tag_manual: r.tag_set != null };
 }
@@ -550,7 +550,7 @@ export class StudoStore extends DurableObject {
         new Date(start).toISOString(), new Date(end).toISOString()).toArray();
       return json(rows.map((r) => ({
         uid: r.uid, course_id: r.course_id, title: r.title, kind: r.kind, start: r.start, end: r.end,
-        status: r.status, building: r.building, room: r.room, room_raw: r.room_raw,
+        status: r.status, building: r.building, room: r.room, room_raw: r.room_raw, note: r.description || null,
         location: formatRoom(r.building, r.room), attendance: !!r.attendance,
         is_override: !!r.is_override, course_attendance: !!r.course_attendance, short: r.short || null,
         ...eventTag(r),
@@ -680,12 +680,12 @@ export class StudoStore extends DurableObject {
     const tagM = path.match(/^\/api\/events\/(.+)\/tag$/);
     if (tagM && method === "PUT") {
       const uid = decodeURIComponent(tagM[1]);
-      const row = this.sql.exec("SELECT title FROM events WHERE uid=?", uid).toArray()[0];
+      const row = this.sql.exec("SELECT title, description FROM events WHERE uid=?", uid).toArray()[0];
       if (!row) return error(404, "Termin nicht gefunden");
       const { tag } = await request.json().catch(() => ({}));
       if (tag != null && tag !== "none" && !TAGS[tag]) return error(422, "Unbekannte Art.");
       // Gleich wie erkannt -> nichts speichern, damit spätere Änderungen in KUSSS durchkommen
-      if (tag == null || tag === detectTag(row.title)) this.sql.exec("DELETE FROM event_tags WHERE uid=?", uid);
+      if (tag == null || tag === detectTag(row.title, row.description)) this.sql.exec("DELETE FROM event_tags WHERE uid=?", uid);
       else this.sql.exec("INSERT INTO event_tags(uid, tag) VALUES(?,?) ON CONFLICT(uid) DO UPDATE SET tag=excluded.tag", uid, tag);
       this.touch("uid=?", uid);
       const r = this.sql.exec(`${EFFECTIVE} WHERE e.uid=?`, uid).toArray()[0];

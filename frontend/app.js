@@ -571,6 +571,7 @@ function openEvent(ev) {
     body.append(group(
       row("Ort", ev.location || "unbekannt"),
       ev.room_raw && ev.room_raw !== ev.room ? row("Laut Uni", ev.room_raw) : null,
+      ev.note ? row("Notiz", ev.note) : null,
       course?.lecturer ? row("Lehrende", course.lecturer) : null,
       ev.status === "cancelled" ? row("Status", "Entfällt") : null,
     ));
@@ -995,10 +996,11 @@ async function openCourse(id) {
     body.append(header("Nächste Termine"), upcoming);
     const from = new Date(), to = c.last_end ? new Date(c.last_end) : addDays(from, 120);
     (to > from ? fetchEvents(from, to) : Promise.resolve([])).then((evs) => {
-      evs = evs.filter((e) => e.course_id === id).slice(0, 10);
+      evs = evs.filter((e) => e.course_id === id);
       upcoming.replaceChildren(...evs.map((e) => {
         const s = new Date(e.start);
         const r = row(`${inDays(s)}`, `${fmtTime.format(s)} · ${e.status === "cancelled" ? "Entfällt" : e.location || "Ort unbekannt"}`, "tap nowrap-label");
+        if (e.note && !e.tag && e.note.length <= 30) r.firstChild.append(` · ${e.note}`);
         if (e.tag) r.firstChild.append(` · ${TAGS[e.tag]}`);
         r.addEventListener("click", () => openEvent(e));
         return r;
