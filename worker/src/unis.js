@@ -10,6 +10,10 @@ export const UNIS = {
     userPlaceholder: "12345678",
     icalHint: "KUSSS → Studierzimmer → Terminexport → Kalender Abonnement → Create.",
     rooms: "jku",
+    mensa: [
+      { id: 1092, name: "Mensa", hours: "Mo–Do 11:30–13:30, Fr 11:00–13:00" },
+      { id: 1141, name: "Mensarei", hours: "Mo–Do 11:00–14:00, Fr 11:00–13:30" },
+    ],
     // Einstiegs-URLs, die direkt das JKU-Single-Sign-on auslösen: Wer im Browser schon
     // einmal angemeldet ist, landet ohne erneute Passworteingabe im jeweiligen System.
     links: [
@@ -105,6 +109,7 @@ export const UNIS = {
     userLabel: "Benutzername",
     userPlaceholder: "Benutzername",
     probe: { start: ["https://online.uni-salzburg.at/plus_online/ee/ui/ca2/app/desktop/", "https://online.uni-salzburg.at/plus_online/webnav.ini", "https://online.uni-salzburg.at/"] }, // Testmodus, bis die Anbindung fertig ist
+    mensa: [{ id: 1109, name: "Mensa NaWi", hours: "Mo–Fr 11:30–13:30" }],
     icalHint: "PLUSonline → Mein Kalender → Exportieren / Abonnieren, Link kopieren.",
     links: [
       { id: "online", name: "PLUSonline", url: "https://online.uni-salzburg.at/", icon: "grid" },

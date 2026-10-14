@@ -30,3 +30,15 @@ export function demoEvents() {
   }
   return out;
 }
+
+/** Beispiel-Abgaben wie aus Moodle, relativ zu heute. */
+export function demoDeadlines() {
+  const at = (days, h) => {
+    const d = new Date(Date.now() + days * 86400_000);
+    return viennaToUtc(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate(), h, 0);
+  };
+  return [
+    { uid: "demo-moodle-1@studo.plus", title: "Übungsblatt 3", course: "Analysis 1", due: at(2, 23), note: null },
+    { uid: "demo-moodle-2@studo.plus", title: "Projektbericht Teil 1", course: "Softwareentwicklung 1", due: at(9, 12), note: null },
+  ];
+}

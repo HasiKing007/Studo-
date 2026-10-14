@@ -23,7 +23,7 @@ const fmtAvg = new Intl.NumberFormat("de-AT", { minimumFractionDigits: 2, maximu
 // Service Worker: lädt neue Versionen im Hintergrund. Ob eine neuere Version online ist, prüft die
 // App selbst (Versionsnummer in sw.js), denn iOS meldet einen Wechsel des Service Workers nicht
 // zuverlässig. Dann erscheint oben ein Banner wie eine iOS-Mitteilung mit Knopf zum Neustarten.
-const BUILD = "studo-v19"; // muss zu VERSION in sw.js passen (Test prüft das)
+const BUILD = "studo-v20"; // muss zu VERSION in sw.js passen (Test prüft das)
 let swReg = null;
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").then((reg) => { swReg = reg; }).catch(() => {});
@@ -553,6 +553,7 @@ $("#avatar").addEventListener("click", openProfile);
 $("#btn-profile").addEventListener("click", openProfile);
 $("#btn-connection").addEventListener("click", openConnection);
 $("#btn-abo").addEventListener("click", openAbo);
+$("#btn-moodle").addEventListener("click", openMoodle);
 
 // Antippen von Chips und Segmenten: kurzes Einfedern
 document.addEventListener("click", (e) => {
@@ -768,22 +769,113 @@ async function renderHome() {
   list.replaceChildren(...todays.map((e) => evRow(e)));
   if (!todays.length) list.append(el("div", "row empty-row", "Heute keine Termine"));
   renderExams(now).catch(() => {});
+  renderMensa(now).catch(() => { $("#mensa-head").hidden = $("#mensa-card").hidden = true; });
 }
 
-// Klausuren, Vorträge, Abgaben der nächsten Monate; nur sichtbar, wenn es welche gibt
+// Klausuren, Vorträge, Abgaben (auch aus Moodle) der nächsten Monate; nur sichtbar, wenn es welche gibt
+async function loadDeadlines() {
+  if (!state.me?.moodle?.connected) return [];
+  if (!state.deadlines || Date.now() - state.deadlines.at > 60_000) state.deadlines = { at: Date.now(), list: await api("/api/deadlines") };
+  return state.deadlines.list;
+}
+function dueText(s, now = new Date()) {
+  const n = Math.round((midnight(s) - midnight(now)) / 86400000);
+  return n <= 1 ? `${inDays(s)}, ${fmtTime.format(s)}` : `in ${n} Tagen`;
+}
 async function renderExams(now) {
-  const evs = (await fetchEvents(now, addDays(midnight(now), 150)))
-    .filter((e) => e.tag && e.status !== "cancelled").slice(0, 6);
-  $("#exams-head").hidden = $("#exam-list").hidden = !evs.length;
-  $("#exam-list").replaceChildren(...evs.map((e) => {
-    const s = new Date(e.start);
-    const n = Math.round((midnight(s) - midnight(now)) / 86400000);
+  const [evs, dls] = await Promise.all([
+    fetchEvents(now, addDays(midnight(now), 150)).then((l) => l.filter((e) => e.tag && e.status !== "cancelled")),
+    loadDeadlines().catch(() => []),
+  ]);
+  const items = [
+    ...evs.map((e) => ({ at: new Date(e.start), title: tagName(e), open: () => openEvent(e) })),
+    ...dls.filter((d) => !d.done && new Date(d.due) > now).map((d) => ({ at: new Date(d.due), title: `Abgabe: ${d.title}`, open: () => openDeadline(d) })),
+  ].sort((a, b) => a.at - b.at).slice(0, 8);
+  $("#exams-head").hidden = $("#exam-list").hidden = !items.length;
+  $("#exam-list").replaceChildren(...items.map((it) => {
     const r = el("button", "row row-nav exam-row");
-    const t = el("span", "exam-title", tagName(e));
-    r.append(t, el("span", "value", n <= 1 ? `${inDays(s)}, ${fmtTime.format(s)}` : `in ${n} Tagen`), chev());
-    r.addEventListener("click", () => openEvent(e));
+    r.append(el("span", "exam-title", it.title), el("span", "value", dueText(it.at, now)), chev());
+    r.addEventListener("click", it.open);
     return r;
   }));
+}
+
+// Eine Moodle-Abgabe: Fälligkeit, Kurs, abhaken
+function openDeadline(d) {
+  pushPage(d.title, (body) => {
+    const due = new Date(d.due);
+    const head = el("div", "page-head");
+    head.append(el("h1", "", `Abgabe: ${d.title}`), el("p", "", `${fmtDay.format(due)} · ${fmtTime.format(due)}`));
+    body.append(head);
+    body.append(group(row("Kurs", d.course || "–"), row("Fällig", dueText(due)), d.note ? row("Notiz", d.note) : null));
+    const doneRow = el("label", "row");
+    doneRow.append(el("span", "", "Erledigt"), makeSwitch(d.done, async (v) => {
+      const list = await put(`/api/deadlines/${encodeURIComponent(d.uid)}`, { done: v });
+      d.done = v; state.deadlines = { at: Date.now(), list };
+    }));
+    body.append(group(doneRow), note("Erledigte Abgaben verschwinden vom Home-Screen und aus dem Apple Kalender."));
+    const moodle = (state.me.links || []).find((l) => l.id === "moodle");
+    if (moodle) {
+      const a = el("a", "row row-nav"); a.href = moodle.url; a.target = "_blank"; a.rel = "noopener";
+      a.append(el("span", "", "Moodle öffnen"), chev());
+      body.append(el("div", "group-spaced"), group(a));
+    }
+  });
+}
+
+// Mensa: heutiger Speiseplan (ab 14 Uhr der nächste Tag), mehrere Mensen per Umschalter
+const MENSA_KEY = "studo_mensa", MENSA_HIDE = "studo_mensa_off";
+const mensaHidden = () => { try { return localStorage.getItem(MENSA_HIDE) === "1"; } catch { return false; } };
+const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const fmtPrice = new Intl.NumberFormat("de-AT", { style: "currency", currency: "EUR" });
+async function renderMensa(now) {
+  const head = $("#mensa-head"), box = $("#mensa-card");
+  if (!state.me.mensa || mensaHidden()) { head.hidden = box.hidden = true; return; }
+  if (!state.mensa || Date.now() - state.mensa.at > 30 * 60_000) state.mensa = { at: Date.now(), ...(await api("/api/mensa")) };
+  const canteens = state.mensa.canteens.filter((c) => c.days.length || c.error);
+  if (!canteens.length) { head.hidden = box.hidden = true; return; }
+  let pick; try { pick = localStorage.getItem(MENSA_KEY); } catch {}
+  let c = canteens.find((x) => String(x.id) === pick) || canteens[0];
+  const wrap = el("div");
+  const show = () => {
+    const today = isoDay(now), late = now.getHours() >= 14;
+    const day = c.days.find((d) => (late ? d.date > today : d.date >= today) && !d.closed && d.meals.length);
+    const date = day && new Date(`${day.date}T12:00:00`);
+    const diff = date ? Math.round((midnight(date) - midnight(now)) / 86400000) : null;
+    head.textContent = `Mensa · ${diff === 0 ? "heute" : diff === 1 ? "morgen" : date ? fmtDay.format(date) : "diese Woche"}`;
+    const meals = day ? day.meals : [];
+    const list = group(...meals.map((m) => {
+      const r = el("div", "row meal");
+      const t = el("div", "meal-text");
+      if (m.category) t.append(el("span", "meal-cat", m.category.replace(/\s*\(.*?\)\s*/g, " ").trim()));
+      t.append(el("span", "meal-name", m.name));
+      r.append(t);
+      if (m.price != null) r.append(el("span", "value", fmtPrice.format(m.price)));
+      return r;
+    }));
+    if (!meals.length) list.append(el("div", "row empty-row", c.error ? "Speiseplan gerade nicht erreichbar" : "Kein Speiseplan in den nächsten Tagen"));
+    wrap.replaceChildren(list, ...(c.hours ? [note(c.hours)] : []));
+  };
+  const parts = [];
+  if (canteens.length > 1) {
+    const seg = el("div", "segmented seg-full mensa-seg");
+    for (const x of canteens) {
+      const b = el("button", x === c ? "on" : "", x.name);
+      b.addEventListener("click", () => {
+        if (x === c) return;
+        c = x;
+        try { localStorage.setItem(MENSA_KEY, String(x.id)); } catch {}
+        $$("button", seg).forEach((y) => y.classList.toggle("on", y === b));
+        haptic(); show();
+        if (!REDUCED) wrap.animate([{ opacity: 0.4 }, { opacity: 1 }], { duration: 220, easing: "ease-out" });
+      });
+      seg.append(b);
+    }
+    parts.push(seg);
+  }
+  show();
+  box.replaceChildren(...parts, wrap);
+  head.hidden = box.hidden = false;
 }
 
 const ICONS = {
@@ -1350,12 +1442,17 @@ function renderSettings() {
   $("#set-status").textContent = me.connected ? (me.ical_source === "auto" ? "Automatisch" : "Verbunden") : "Nicht verbunden";
   $("#set-sync").textContent = me.last_sync ? ago(me.last_sync) : "noch nie";
   $("#sync-error").textContent = me.last_sync_error || "";
+  $("#set-moodle").textContent = me.moodle?.error ? "Fehler" : me.moodle?.connected ? "Verbunden" : "";
+  $("#mensa-row").hidden = !me.mensa;
+  if (me.mensa && !$("#mensa-row .switch")) {
+    $("#mensa-row").append(makeSwitch(!mensaHidden(), (v) => { try { localStorage.setItem(MENSA_HIDE, v ? "0" : "1"); } catch {} }));
+  }
   applyTheme();
 }
 
 $("#btn-sync").addEventListener("click", async () => {
   $("#btn-sync").textContent = "Wird aktualisiert …";
-  try { await post("/api/sync"); weekCache.clear(); $("#sync-error").textContent = ""; }
+  try { await post("/api/sync"); weekCache.clear(); state.deadlines = null; $("#sync-error").textContent = ""; }
   catch (err) { $("#sync-error").textContent = err.message; }
   $("#btn-sync").textContent = "Jetzt aktualisieren";
   await loadMe(); renderSettings();
@@ -1428,6 +1525,46 @@ function openConnection() {
       btn.textContent = "Link speichern";
     });
     body.append(header("Kalender-Link (iCal)"), form);
+  });
+}
+
+// Moodle-Abgaben: persönlichen Kalender-Export-Link aus Moodle hinterlegen
+function openMoodle() {
+  const me = state.me;
+  pushPage("Moodle-Abgaben", (body) => {
+    const head = el("div", "page-head");
+    const m = me.moodle || {};
+    head.append(el("h1", "", "Moodle-Abgaben"),
+      el("p", "", m.connected ? `Verbunden${m.last_sync ? `, aktualisiert ${ago(m.last_sync)}` : ""}` : "Abgabefristen aus Moodle auf dem Home-Screen und im Apple Kalender."));
+    body.append(head);
+    const form = el("form");
+    const url = el("input"); url.type = "url"; url.name = "moodle_url"; url.placeholder = "https://…/calendar/export_execute.php?…"; url.autocomplete = "off"; url.className = "field";
+    const btn = el("button", "row row-btn", "Link speichern"); btn.type = "submit";
+    const err = el("p", "error", m.error || "");
+    form.append(group(url, btn), err);
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault(); btn.textContent = "Wird geprüft …"; btn.disabled = true; err.textContent = "";
+      try { await put("/api/settings", { moodle_url: url.value }); await loadMe(); state.deadlines = null; haptic(); navLockUntil = 0; goBack(); }
+      catch (x) { err.textContent = x.message; }
+      btn.textContent = "Link speichern"; btn.disabled = false;
+    });
+    body.append(header(m.connected ? "Neuen Link einfügen" : "Kalender-Link aus Moodle"), form);
+    const steps = el("ol", "steps");
+    for (const t of ["In Moodle oben auf das Kalender-Symbol tippen und „Vollständigen Kalender“ öffnen.",
+      "Ganz unten „Kalender importieren oder exportieren“ und dann „Kalender exportieren“ wählen.",
+      "Bei Ereignisse „Alle Ereignisse“ (oder „Ereignisse aus Kursen“), bei Zeitspanne „Kürzliche und nächste 60 Tage“ wählen.",
+      "„Kalender-URL abfragen“ tippen, den Link kopieren und oben einfügen."]) steps.append(el("li", "", t));
+    body.append(header("So findest du den Link"), group(steps),
+      note("Der Link wirkt wie ein Passwort für deinen Moodle-Kalender. Teile ihn mit niemandem."));
+    if (m.connected && !me.demo) {
+      const rm = el("button", "row row-btn danger", "Moodle trennen");
+      rm.addEventListener("click", async () => {
+        if (!confirm("Moodle-Abgaben aus Studo+ entfernen?")) return;
+        try { await put("/api/settings", { moodle_url: "" }); await loadMe(); state.deadlines = null; navLockUntil = 0; goBack(); }
+        catch (x) { err.textContent = x.message; }
+      });
+      body.append(el("div", "group-spaced"), group(rm));
+    }
   });
 }
 
@@ -1677,7 +1814,7 @@ async function freshen() {
   freshening = true;
   try {
     const r = await post("/api/sync?if_stale=1");
-    if (!r?.skipped) { for (const w of weekCache.values()) w.at = 0; await loadMe(); if (!stack.length) renderTab(state.tab); }
+    if (!r?.skipped) { for (const w of weekCache.values()) w.at = 0; state.deadlines = null; await loadMe(); if (!stack.length) renderTab(state.tab); }
   } catch {} finally { freshening = false; }
 }
 document.addEventListener("visibilitychange", () => {
