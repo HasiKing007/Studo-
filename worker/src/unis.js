@@ -10,10 +10,9 @@ export const UNIS = {
     userPlaceholder: "12345678",
     icalHint: "KUSSS → Studierzimmer → Terminexport → Kalender Abonnement → Create.",
     rooms: "jku",
-    mensa: [
-      { id: 1092, name: "Mensa", hours: "Mo–Do 11:30–13:30, Fr 11:00–13:00" },
-      { id: 1141, name: "Mensarei", hours: "Mo–Do 11:00–14:00, Fr 11:00–13:30" },
-    ],
+    // Die Mensarei (1141) liefert bei OpenMensa denselben Plan wie die Mensa, daher nur diese
+    campus: "usi", // Infobereich am Home-Screen: USI-Fitnessstudio, Sauna, Hinweise, News
+    mensa: [{ id: 1092, name: "Mensa", hours: "Mo–Do 11:30–13:30, Fr 11:00–13:00" }],
     // Einstiegs-URLs, die direkt das JKU-Single-Sign-on auslösen: Wer im Browser schon
     // einmal angemeldet ist, landet ohne erneute Passworteingabe im jeweiligen System.
     links: [

@@ -7,6 +7,7 @@ import { buildCalendar, parseICS, viennaToUtc } from "./ical.js";
 import { formatRoom, parseRoom } from "./rooms.js";
 import { demoDeadlines, demoEvents, demoExamRegs } from "./demo.js";
 import { jkuConnect, parseGrade } from "./jku.js";
+import { usiInfo } from "./campus.js";
 import { fetchMensa } from "./mensa.js";
 import { isMoodleLink, parseMoodle } from "./moodle.js";
 import { probeLogin } from "./probe.js";
@@ -652,6 +653,7 @@ export class StudoStore extends DurableObject {
         last_sync: this.getSetting("moodle_sync"),
       },
       mensa: (this.uni.mensa || []).length > 0,
+      campus: this.uni.campus || null,
     };
   }
 
@@ -760,12 +762,16 @@ export class StudoStore extends DurableObject {
     }
     if (path === "/api/push/test" && method === "POST") {
       const { endpoint } = await request.json().catch(() => ({}));
-      const sent = await this.push([{ title: "Studo+", body: "Mitteilungen sind eingerichtet. So sehen Raumänderungen und Erinnerungen aus.", tag: "test" }], endpoint || null);
+      const sent = await this.push([{ title: "Mitteilungen sind aktiv", body: "So erfährst du von Raumänderungen, Ausfällen und nahen Fristen.", tag: "test" }], endpoint || null);
       if (!sent) return error(502, "Die Mitteilung konnte nicht zugestellt werden. Schalte Mitteilungen aus und wieder ein.");
       return json({ sent });
     }
 
     if (path === "/api/exam-regs" && method === "GET") return json(this.examRegsPayload());
+
+    if (path === "/api/campus" && method === "GET") {
+      return json(this.uni.campus === "usi" ? { usi: await usiInfo() } : {});
+    }
 
     if (path === "/api/mensa" && method === "GET") {
       return json({ canteens: this.uni.mensa?.length ? await fetchMensa(this.uni.mensa) : [] });
