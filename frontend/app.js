@@ -1000,7 +1000,6 @@ async function openCourse(id) {
       upcoming.replaceChildren(...evs.map((e) => {
         const s = new Date(e.start);
         const r = row(`${inDays(s)}`, `${fmtTime.format(s)} · ${e.status === "cancelled" ? "Entfällt" : e.location || "Ort unbekannt"}`, "tap nowrap-label");
-        if (e.note && !e.tag && e.note.length <= 30) r.firstChild.append(` · ${e.note}`);
         if (e.tag) r.firstChild.append(` · ${TAGS[e.tag]}`);
         r.addEventListener("click", () => openEvent(e));
         return r;
