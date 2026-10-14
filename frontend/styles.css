@@ -528,7 +528,7 @@ a.row { color: inherit; text-decoration: none; }
 /* ---------- Anmeldeseite: weicher Farbverlauf, Glas-Gruppen, Auswahl als Blatt ---------- */
 #login { position: relative; isolation: isolate; overflow: hidden; }
 #login::before {
-  content: ""; position: fixed; inset: -25%; z-index: -1; pointer-events: none;
+  content: ""; position: fixed; inset: -25% -25% calc(-25% - 160px); z-index: -1; pointer-events: none;
   background:
     radial-gradient(38% 30% at 22% 18%, color-mix(in srgb, var(--accent) 30%, transparent), transparent 70%),
     radial-gradient(42% 34% at 85% 34%, rgba(255, 159, 10, .22), transparent 70%),
@@ -537,7 +537,7 @@ a.row { color: inherit; text-decoration: none; }
 }
 /* Foto je Hochschule: gut erkennbar, nur leicht weichgezeichnet. Lesbarkeit kommt von der Glaskarte, nicht vom Verwischen */
 #login::after {
-  content: ""; position: fixed; inset: -8px; z-index: -1; pointer-events: none; opacity: 0; transition: opacity .6s ease;
+  content: ""; position: fixed; inset: -8px -8px -160px; /* unten weiter: iOS zeigt als Web-App unter dem Viewport noch einen Streifen */ z-index: -1; pointer-events: none; opacity: 0; transition: opacity .6s ease;
   background: linear-gradient(var(--login-tint-top), transparent 30%, transparent 62%, var(--login-tint-bottom)), linear-gradient(var(--login-tint), var(--login-tint)), var(--login-photo, none) center 40% / cover no-repeat;
   filter: blur(2px) saturate(1.1);
 }
@@ -572,21 +572,15 @@ a.row { color: inherit; text-decoration: none; }
 /* Autofill färbt Felder sonst hellblau, das passt nicht ins Glas */
 #login .field:-webkit-autofill { -webkit-box-shadow: 0 0 0 100px transparent inset; -webkit-text-fill-color: var(--text); transition: background-color 9999s; }
 #login #to-admin { margin-top: 4px; }
-/* Handy: Foto oben frei, Anmeldung als Glasblatt unten, wie bei iOS-Einstiegsseiten */
+/* Handy: Karte etwas kompakter, damit rundherum mehr Foto bleibt */
 @media (max-width: 560px) {
-  #login:is([data-uni="jku"], [data-uni="abpu"], [data-uni="plus"]) { place-items: end center; padding: 0; }
-  #login:is([data-uni="jku"], [data-uni="abpu"], [data-uni="plus"]) .login-box {
-    max-width: none; border-radius: 28px 28px 0 0; padding: 24px 16px calc(10px + env(safe-area-inset-bottom));
-    box-shadow: 0 -10px 40px rgba(0, 0, 0, .14), inset 0 .5px 0 rgba(255, 255, 255, .5);
-    animation-name: login-sheet-in;
-  }
-  #login .login-head { margin-bottom: 18px; }
-  #login .wordmark { font-size: 36px; }
+  #login:is([data-uni="jku"], [data-uni="abpu"], [data-uni="plus"]) .login-box { padding: 24px 16px 12px; border-radius: 26px; }
+  #login .login-head { margin-bottom: 20px; }
+  #login .wordmark { font-size: 38px; }
   #login .login-sub { font-size: 14px; margin-top: 6px; }
   #login #login-hint { margin: 8px 0 12px; }
   #login .link-btn { margin-top: 8px; padding: 4px 10px; }
 }
-@keyframes login-sheet-in { from { transform: translateY(40px); opacity: 0; } }
 #login .btn-primary { box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 35%, transparent); }
 #uni-pick { width: 100%; text-align: left; }
 #uni-pick > span:first-child { flex: none; }
