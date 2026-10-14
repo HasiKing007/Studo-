@@ -23,7 +23,7 @@ const fmtAvg = new Intl.NumberFormat("de-AT", { minimumFractionDigits: 2, maximu
 // Service Worker: lädt neue Versionen im Hintergrund. Ob eine neuere Version online ist, prüft die
 // App selbst (Versionsnummer in sw.js), denn iOS meldet einen Wechsel des Service Workers nicht
 // zuverlässig. Dann erscheint oben ein Banner wie eine iOS-Mitteilung mit Knopf zum Neustarten.
-const BUILD = "studo-v18"; // muss zu VERSION in sw.js passen (Test prüft das)
+const BUILD = "studo-v19"; // muss zu VERSION in sw.js passen (Test prüft das)
 let swReg = null;
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").then((reg) => { swReg = reg; }).catch(() => {});
@@ -554,6 +554,43 @@ $("#btn-profile").addEventListener("click", openProfile);
 $("#btn-connection").addEventListener("click", openConnection);
 $("#btn-abo").addEventListener("click", openAbo);
 
+// Antippen von Chips und Segmenten: kurzes Einfedern
+document.addEventListener("click", (e) => {
+  const c = e.target.closest?.(".chip, .segmented button");
+  if (c && !REDUCED) c.animate([{ transform: "scale(.92)" }, { transform: "scale(1.03)", offset: .6 }, { transform: "none" }], { duration: 300, easing: "ease-out" });
+});
+
+// Beim Öffnen eines Tabs gleiten die Blöcke dezent nacheinander herein (nicht bei Hintergrund-Updates)
+function enterTab(name) {
+  if (REDUCED || name === "calendar") return;
+  const tab = $(`#tab-${name}`);
+  const sel = name === "study" ? ".chart-box, #grade-list > *" : ".next, .group, .links, .stats, .chips, .section-header, .notice";
+  [...tab.querySelectorAll(sel)].filter((n) => !n.hidden && n.offsetParent).slice(0, 10).forEach((n, i) =>
+    n.animate([{ opacity: 0, transform: "translateY(10px)" }, { opacity: 1, transform: "none" }],
+      { duration: 380, delay: 30 + i * 35, easing: "cubic-bezier(.32,.72,0,1)", fill: "backwards" }));
+}
+
+// Segmentschalter wie bei iOS: ein Schieber gleitet zur gewählten Option statt hart umzuspringen
+function syncSegment(seg) {
+  const on = seg.querySelector("button.on");
+  let thumb = seg.querySelector(".seg-thumb");
+  if (!on) { thumb?.remove(); return; }
+  if (!thumb) { thumb = el("span", "seg-thumb"); seg.prepend(thumb); seg.classList.add("has-thumb"); thumb.style.transition = "none"; }
+  thumb.style.width = `${on.offsetWidth}px`;
+  thumb.style.transform = `translateX(${on.offsetLeft - 2}px)`;
+  if (thumb.style.transition === "none") requestAnimationFrame(() => (thumb.style.transition = ""));
+}
+new MutationObserver((list) => {
+  const segs = new Set();
+  for (const m of list) {
+    const t = m.target.closest?.(".segmented");
+    if (t) segs.add(t);
+    for (const n of m.addedNodes || []) if (n.nodeType === 1) n.querySelectorAll?.(".segmented").forEach((x) => segs.add(x));
+  }
+  segs.forEach((s) => requestAnimationFrame(() => syncSegment(s)));
+}).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["class"] });
+addEventListener("resize", () => $$(".segmented").forEach(syncSegment));
+
 function switchTab(name) {
   state.tab = name;
   if (name === "study") state.studyIntro = true; // Ring und Balken beim Öffnen einmal animieren
@@ -563,11 +600,12 @@ function switchTab(name) {
   document.body.classList.toggle("locked", name === "calendar" || stack.length > 0);
   window.scrollTo({ top: 0 });
   $("#appbar").classList.remove("scrolled");
-  renderTab(name);
+  renderTab(name, true);
+  requestAnimationFrame(() => $$(`#tab-${name} .segmented`).forEach(syncSegment)); // war versteckt -> Maße erst jetzt bekannt
 }
-function renderTab(name) {
+function renderTab(name, intro = false) {
   const run = { home: renderHome, calendar: renderCalendar, courses: renderCourses, study: renderStudy, settings: renderSettings }[name];
-  if (run) Promise.resolve(run()).catch((err) => console.error(err));
+  if (run) Promise.resolve(run()).then(() => { if (intro && state.tab === name) enterTab(name); }).catch((err) => console.error(err));
 }
 // Waagrechtes Ziehen mit Richtungserkennung: senkrechtes Scrollen bleibt unberührt
 function hDrag(target, { canStart = () => true, onMove, onEnd }) {
