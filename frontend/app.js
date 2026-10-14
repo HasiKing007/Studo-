@@ -23,7 +23,7 @@ const fmtAvg = new Intl.NumberFormat("de-AT", { minimumFractionDigits: 2, maximu
 // Service Worker: lädt neue Versionen im Hintergrund. Ob eine neuere Version online ist, prüft die
 // App selbst (Versionsnummer in sw.js), denn iOS meldet einen Wechsel des Service Workers nicht
 // zuverlässig. Dann erscheint oben ein Banner wie eine iOS-Mitteilung mit Knopf zum Neustarten.
-const BUILD = "studo-v17"; // muss zu VERSION in sw.js passen (Test prüft das)
+const BUILD = "studo-v18"; // muss zu VERSION in sw.js passen (Test prüft das)
 let swReg = null;
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").then((reg) => { swReg = reg; }).catch(() => {});
@@ -160,6 +160,21 @@ function haptic() {
     }
     hapticLabel.click();
   } catch { /* ohne Haptik */ }
+}
+
+const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
+// Zahl hochzählen (iOS-artig abbremsend); onStep bekommt den Fortschritt 0..1 für Haptik-Ticks
+function countUp(node, to, { dur = 1100, fmt = (v) => String(Math.round(v)), onStep } = {}) {
+  if (REDUCED || !to) { node.textContent = fmt(to); return; }
+  const t0 = performance.now();
+  const ease = (t) => 1 - Math.pow(1 - t, 3);
+  const tick = (now) => {
+    const t = Math.min(1, (now - t0) / dur), k = ease(t);
+    node.textContent = fmt(to * k);
+    onStep?.(k);
+    if (t < 1) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
 }
 
 function el(tag, cls, text) {
@@ -532,6 +547,7 @@ async function renderAdmin(data) {
 $$(".tabbar button").forEach((b) => b.addEventListener("click", () => {
   if (b.dataset.tab === state.tab) { window.scrollTo({ top: 0, behavior: "smooth" }); return; }
   haptic(); switchTab(b.dataset.tab);
+  if (!REDUCED) b.querySelector("svg")?.animate([{ transform: "scale(.78)" }, { transform: "scale(1.08)", offset: .6 }, { transform: "none" }], { duration: 380, easing: "ease-out" });
 }));
 $("#avatar").addEventListener("click", openProfile);
 $("#btn-profile").addEventListener("click", openProfile);
@@ -540,6 +556,7 @@ $("#btn-abo").addEventListener("click", openAbo);
 
 function switchTab(name) {
   state.tab = name;
+  if (name === "study") state.studyIntro = true; // Ring und Balken beim Öffnen einmal animieren
   $$(".tabbar button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   $$(".tab").forEach((t) => (t.hidden = t.id !== `tab-${name}`));
   $("#appbar-title").textContent = TAB_TITLES[name] || "";
@@ -1126,8 +1143,19 @@ async function renderStudy() {
   const ring = el("div", "ring");
   const ringSvg = svg(`<circle class="track" cx="46" cy="46" r="40"/><circle class="val" cx="46" cy="46" r="40" stroke-dasharray="${C}" stroke-dashoffset="${C}"/>`);
   ringSvg.setAttribute("viewBox", "0 0 92 92");
-  ring.append(ringSvg, el("div", "ring-label", `${Math.round(pct * 100)} %`));
+  const ringLabel = el("div", "ring-label", `${Math.round(pct * 100)} %`);
+  ring.append(ringSvg, ringLabel);
+  const intro = state.studyIntro; state.studyIntro = false;
   requestAnimationFrame(() => requestAnimationFrame(() => { const v = $(".val", ring); if (v) v.style.strokeDashoffset = String(C * (1 - pct)); }));
+  if (intro) {
+    // Prozent zählen mit dem Ring mit, dazu ein leichtes Tippen je 10 % und ein Abschluss-Tippen
+    let ticks = 0;
+    countUp(ringLabel, pct * 100, { fmt: (v) => `${Math.round(v)} %`, onStep: (k) => {
+      const n = Math.floor(k * pct * 10);
+      if (n > ticks) { ticks = n; haptic(); }
+      if (k === 1) { setTimeout(haptic, 90); ring.animate([{ transform: "none" }, { transform: "scale(1.06)" }, { transform: "none" }], { duration: 320, easing: "ease-out" }); }
+    } });
+  } else $(".val", ring).style.transition = "none";
   const txt = el("div", "progress-text");
   txt.append(el("strong", "", `${fmtNum.format(n.ects)} von ${n.target} ECTS`),
     el("span", "", n.ects >= n.target ? "Geschafft!" : `Noch ${fmtNum.format(Math.max(0, n.target - n.ects))} ECTS`));
@@ -1148,7 +1176,11 @@ async function renderStudy() {
     [String(n.passed.length), "Prüfungen bestanden"],
     [perSem ? fmtNum.format(Math.round(perSem * 10) / 10) : "–", "ECTS pro Semester"],
   ];
-  $("#study-stats").replaceChildren(...stats.map(([v, l]) => { const s = el("div", "stat"); s.append(el("div", "stat-value", v), el("div", "stat-label", l)); return s; }));
+  $("#study-stats").replaceChildren(...stats.map(([v, l], i) => {
+    const s = el("div", "stat"); s.append(el("div", "stat-value", v), el("div", "stat-label", l));
+    if (intro && !REDUCED) s.animate([{ opacity: 0, transform: "translateY(8px) scale(.97)" }, { opacity: 1, transform: "none" }], { duration: 420, delay: 120 + i * 60, easing: "cubic-bezier(.32,.72,0,1)", fill: "backwards" });
+    return s;
+  }));
 
   const chart = $("#ects-chart");
   chart.style.setProperty("--n", Math.max(4, semList.length));
@@ -1158,6 +1190,7 @@ async function renderStudy() {
     const b = el("div", "bar bar-a"); b.style.height = `${(v / maxE) * 100}%`;
     if (s === cur) col.classList.add("current");
     col.append(el("div", "val-lbl", fmtNum.format(v)), b, el("span", "lbl", s === cur ? "jetzt" : semShort(s)));
+    if (intro) growBar(b, semList.findIndex(([x]) => x === s));
     return col;
   }));
   if (!semList.length) chart.replaceChildren(el("div", "chart-empty", "Noch keine Daten"));
@@ -1168,6 +1201,7 @@ async function renderStudy() {
     const col = el("div", `col g${i + 1}`);
     const b = el("div", "bar"); b.style.height = `${(c / maxD) * 72}%`;
     col.append(el("span", "", String(c)), b, el("strong", "", String(i + 1)));
+    if (intro) growBar(b, i);
     return col;
   }));
 
@@ -1183,6 +1217,13 @@ async function renderStudy() {
   }
   if (out.length) out.push(note("Rechts steht die Note. ✓ heißt „mit Erfolg teilgenommen“ (ohne Ziffernnote)."));
   $("#grade-list").replaceChildren(...out);
+}
+
+// Balken wachsen von unten mit leichtem Nachfedern, einer nach dem anderen
+function growBar(b, i) {
+  if (REDUCED) return;
+  b.animate([{ transform: "scaleY(0)" }, { transform: "scaleY(1.04)", offset: .75 }, { transform: "none" }],
+    { duration: 620, delay: 250 + i * 55, easing: "cubic-bezier(.32,.72,0,1)", fill: "backwards" });
 }
 
 function gradeRow(g) {
