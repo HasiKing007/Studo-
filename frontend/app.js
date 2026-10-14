@@ -23,7 +23,7 @@ const fmtAvg = new Intl.NumberFormat("de-AT", { minimumFractionDigits: 2, maximu
 // Service Worker: lädt neue Versionen im Hintergrund. Ob eine neuere Version online ist, prüft die
 // App selbst (Versionsnummer in sw.js), denn iOS meldet einen Wechsel des Service Workers nicht
 // zuverlässig. Dann erscheint oben ein Banner wie eine iOS-Mitteilung mit Knopf zum Neustarten.
-const BUILD = "studo-v25"; // muss zu VERSION in sw.js passen (Test prüft das)
+const BUILD = "studo-v27"; // muss zu VERSION in sw.js passen (Test prüft das)
 let swReg = null;
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").then((reg) => { swReg = reg; }).catch(() => {});
@@ -79,16 +79,36 @@ function showUpdateToast() {
 // ---------- Erscheinungsbild (Standard: hell) ----------
 function getTheme() { try { return localStorage.getItem("studo_theme") || "light"; } catch { return "light"; } }
 const darkQuery = matchMedia("(prefers-color-scheme: dark)");
+// Hochschulfoto oben auf Home (bis hinter die Dynamic Island). Die Statusleiste bekommt die Farbe der
+// obersten Fotokante, damit kein Rand entsteht; beim Scrollen oder in anderen Tabs wieder die normale Farbe.
+const HERO_TOP = {
+  jku: { light: "#AFB3AB", dark: "#3C4036" }, abpu: { light: "#B7C4D4", dark: "#434F5C" }, plus: { light: "#8DA8CD", dark: "#1D3656" },
+};
+const isDark = (theme = getTheme()) => theme === "dark" || (theme === "auto" && darkQuery.matches);
+function heroUni() {
+  const id = state.me?.uni?.id;
+  return HERO_TOP[id] ? id : null;
+}
+function setStatusColor(color) {
+  // iOS übernimmt eine geänderte Farbe der Statusleiste oft erst verzögert: Meta-Tag neu einsetzen
+  const old = $("#theme-color");
+  if (old.content === color) return;
+  const meta = document.createElement("meta");
+  meta.name = "theme-color"; meta.id = "theme-color"; meta.content = color;
+  old.replaceWith(meta);
+}
+function updateStatusColor() {
+  const dark = isDark(), uni = heroUni();
+  const onHero = uni && state.tab === "home" && !stack.length && scrollY < 40 && !$("#app").hidden;
+  document.documentElement.dataset.hero = uni || "";
+  document.documentElement.classList.toggle("hero-tab", state.tab === "home");
+  document.documentElement.style.setProperty("--hero-top", uni ? HERO_TOP[uni][dark ? "dark" : "light"] : "transparent");
+  setStatusColor(onHero ? HERO_TOP[uni][dark ? "dark" : "light"] : dark ? "#000000" : "#F2F2F7");
+}
 function applyTheme(theme = getTheme()) {
   document.documentElement.dataset.theme = theme;
-  const dark = theme === "dark" || (theme === "auto" && darkQuery.matches);
-  // iOS übernimmt eine geänderte Farbe der Statusleiste oft erst verzögert: Meta-Tag neu einsetzen
-  const color = dark ? "#000000" : "#F2F2F7", old = $("#theme-color");
-  if (old.content !== color) {
-    const meta = document.createElement("meta");
-    meta.name = "theme-color"; meta.id = "theme-color"; meta.content = color;
-    old.replaceWith(meta);
-  }
+  const dark = isDark(theme);
+  updateStatusColor();
   document.documentElement.style.colorScheme = dark ? "dark" : "light";
   $$("#theme-seg button").forEach((b) => b.classList.toggle("on", b.dataset.theme === theme));
 }
@@ -317,6 +337,7 @@ function pushPage(title, build, { head = true } = {}) {
   $("#pages").append(page);
   stack.at(-1)?.page.classList.add("under");
   stack.push(entry);
+  updateStatusColor();
   shade.classList.add("on");
   document.body.classList.add("locked");
   // Während des Hereinschiebens keine Tipps annehmen (zweiter Tipp eines Doppeltipps landet sonst auf der neuen Seite)
@@ -336,6 +357,7 @@ function refreshPage(entry) { entry.body.replaceChildren(); entry.build(entry.bo
 function popTop(animate = true) {
   const top = stack.pop();
   if (!top) return;
+  updateStatusColor();
   if (animate) {
     top.page.classList.remove("in");
     setTimeout(() => top.page.remove(), 460);
@@ -445,7 +467,7 @@ function formPage(title, fields, submitLabel, onSubmit, footnote) {
 // ---------- Login ----------
 function hideAll() { ["#login", "#admin-login", "#admin-screen", "#app"].forEach((s) => ($(s).hidden = true)); closeAllPages(); }
 function showLogin() {
-  hideAll(); $("#login").hidden = false; endSplash();
+  hideAll(); $("#login").hidden = false; endSplash(); updateStatusColor();
   loadUnis();
 }
 
@@ -459,10 +481,26 @@ async function loadUnis() {
   updateLoginHint();
 }
 
+// Hintergrundfotos der Anmeldeseite (Bilddateien in frontend/, Namensnennung laut Lizenz)
+const LOGIN_PHOTOS = {
+  jku: { by: "Hertha Hurnaus", license: "CC BY-SA 4.0", licenseUrl: "https://creativecommons.org/licenses/by-sa/4.0/deed.de",
+    source: "https://commons.wikimedia.org/wiki/File:Caramel-architekten-science-park-jku.gif" },
+  abpu: { by: "Simon Bauer, Architekturbüro 1", license: "CC BY 3.0", licenseUrl: "https://creativecommons.org/licenses/by/3.0/deed.de",
+    source: "https://commons.wikimedia.org/wiki/File:Neubau_Anton_Bruckner_Privatuniversit%C3%A4t_4126_CC-BY_%27Architekturb%C3%BCro_1_-_Foto_Simon_Bauer%27.tif" },
+  plus: { by: "Leonhard Lenz", license: "CC0", licenseUrl: "https://creativecommons.org/publicdomain/zero/1.0/deed.de",
+    source: "https://commons.wikimedia.org/wiki/File:Paris_Lodron_Universit%C3%A4t_Theologische_Fakult%C3%A4t_Salzburg_2023-09-27_01.jpg" },
+};
 function updateLoginHint() {
   const u = state.unis.find((x) => x.id === $("#login-uni").value);
   if (!u) return;
   $("#uni-name").textContent = u.name;
+  $("#login").dataset.uni = u.id; // Hintergrundfoto je Hochschule
+  const photo = LOGIN_PHOTOS[u.id], credit = $("#photo-credit");
+  credit.hidden = !photo;
+  if (photo) {
+    const link = (href, text) => { const a = el("a", "", text); a.href = href; a.target = "_blank"; a.rel = "noopener"; return a; };
+    credit.replaceChildren(`Foto: ${photo.by}, `, link(photo.source, "Wikimedia Commons"), ", ", link(photo.licenseUrl, photo.license), ", unscharf bearbeitet");
+  }
   const user = $("#login-user");
   user.placeholder = u.userLabel; user.setAttribute("aria-label", u.userLabel);
   $("#login-hint").textContent = u.auto
@@ -639,6 +677,7 @@ function switchTab(name) {
   $$(".tabbar button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   $$(".tab").forEach((t) => (t.hidden = t.id !== `tab-${name}`));
   $("#appbar-title").textContent = TAB_TITLES[name] || "";
+  updateStatusColor();
   document.body.classList.toggle("locked", name === "calendar" || stack.length > 0);
   window.scrollTo({ top: 0 });
   $("#appbar").classList.remove("scrolled");
@@ -687,7 +726,7 @@ function hDrag(target, { canStart = () => true, onMove, onEnd }) {
 }
 const EASE = "cubic-bezier(.25,.8,.25,1)";
 
-addEventListener("scroll", () => $$(".appbar").forEach((a) => a.classList.toggle("scrolled", scrollY > 40)), { passive: true });
+addEventListener("scroll", () => { $$(".appbar").forEach((a) => a.classList.toggle("scrolled", scrollY > 40)); updateStatusColor(); }, { passive: true });
 
 async function fetchEvents(from, to) {
   return api(`/api/schedule?start=${encodeURIComponent(from.toISOString())}&end=${encodeURIComponent(to.toISOString())}`);
@@ -2068,6 +2107,7 @@ function openProgram(p) {
 async function loadMe() {
   state.me = await api("/api/me");
   setAvatar($("#avatar"));
+  updateStatusColor();
 }
 
 async function boot() {
@@ -2077,7 +2117,7 @@ async function boot() {
     try { await showAdmin(); } catch { showLogin(); }
     return;
   }
-  hideAll(); $("#app").hidden = false;
+  hideAll(); $("#app").hidden = false; updateStatusColor();
   try { const m = localStorage.getItem("studo_calmode"); if (["day", "week", "list"].includes(m)) state.cal.mode = m; } catch {}
   if (!state.unis.length) api("/api/unis").then((u) => (state.unis = u)).catch(() => {});
   loadGrades().catch(() => {});
