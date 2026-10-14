@@ -7,6 +7,7 @@ import { buildCalendar, parseICS } from "./ical.js";
 import { formatRoom, parseRoom } from "./rooms.js";
 import { demoEvents } from "./demo.js";
 import { jkuConnect, parseGrade } from "./jku.js";
+import { probeLogin } from "./probe.js";
 import { UNIS, matrikel } from "./unis.js";
 import { error, hashPassword, json, parseSession, randomToken, sha256, timingSafeEqual, verifyPassword } from "./util.js";
 
@@ -404,7 +405,7 @@ export class StudoStore extends DurableObject {
     const uniId = this.getSetting("uni");
     return {
       username: this.getSetting("username"),
-      uni: { id: uniId, name: this.uni.name, auto: this.uni.auth === "jku", ical_hint: this.uni.icalHint },
+      uni: { id: uniId, name: this.uni.name, auto: this.uni.auth === "jku", ical_hint: this.uni.icalHint, probe: !!this.uni.probe },
       name: this.getSetting("display_name") || this.getSetting("kusss_name"),
       name_source: this.getSetting("display_name") ? "manual" : this.getSetting("kusss_name") ? "uni" : null,
       avatar: this.getSetting("avatar"),
@@ -477,6 +478,18 @@ export class StudoStore extends DurableObject {
         }
       }
       return json({ ok: true });
+    }
+
+    // Testmodus: Login des Uni-Systems einmal durchlaufen und nur die Seitenstruktur beschreiben
+    if (path === "/api/probe" && method === "POST") {
+      if (!this.uni.probe) return error(400, "Für diese Hochschule gibt es keinen Testmodus.");
+      const recent = JSON.parse(this.getSetting("probe_times") || "[]").filter((t) => Date.now() - t < 3600_000);
+      if (recent.length >= 5) return error(429, "Höchstens 5 Tests pro Stunde. Bitte später erneut probieren.");
+      this.setSetting("probe_times", JSON.stringify([...recent, Date.now()]));
+      const { username, password } = await request.json().catch(() => ({}));
+      if (!username || !password) return error(422, "Benutzername und Passwort angeben.");
+      try { return json(await probeLogin(this.uni.probe, String(username), String(password))); }
+      catch (e) { return error(502, `Test fehlgeschlagen: ${e.message}`); }
     }
 
     // JKU: Abo-Link erneut automatisch holen (Passwort wird nur für diesen Vorgang verwendet)

@@ -1181,6 +1181,35 @@ $("#btn-delete").addEventListener("click", async () => {
   await api("/api/account", { method: "DELETE" }); showLogin();
 });
 
+// Testmodus für Unis ohne fertige Anbindung: einmal anmelden, Diagnose-Text an Jacob schicken
+function probeSection(me) {
+  const form = el("form");
+  const user = el("input"); user.className = "field"; user.placeholder = "Benutzername der Uni"; user.autocomplete = "username"; user.required = true;
+  user.value = me.matrikel || ""; user.autocapitalize = "none";
+  const pw = el("input"); pw.className = "field"; pw.type = "password"; pw.placeholder = "Passwort der Uni"; pw.autocomplete = "current-password"; pw.required = true;
+  const btn = el("button", "row row-btn", "Login testen"); btn.type = "submit";
+  const err = el("p", "error");
+  const out = el("div");
+  form.append(group(user, pw, btn), note("Studo+ meldet sich einmal an und notiert nur, welche Seiten und Formularfelder kamen – keine Passwörter, keine Inhalte. Das Passwort wird nicht gespeichert."), err, out);
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault(); err.textContent = ""; out.replaceChildren();
+    btn.disabled = true; btn.textContent = "Wird getestet …";
+    try {
+      const r = await post("/api/probe", { username: user.value, password: pw.value });
+      pw.value = "";
+      const pre = el("pre", "probe-report", r.report);
+      const copy = el("button", "row row-btn", "Text kopieren");
+      copy.type = "button";
+      copy.addEventListener("click", async () => {
+        try { await navigator.clipboard.writeText(r.report); copy.textContent = "Kopiert ✓"; haptic(); } catch { copy.textContent = "Bitte Text markieren und kopieren"; }
+      });
+      out.append(header(`Ergebnis: ${r.status}`), group(pre, copy), note("Diesen Text bitte an Jacob schicken."));
+    } catch (x) { err.textContent = x.message; }
+    btn.disabled = false; btn.textContent = "Login testen";
+  });
+  return [header("Automatische Anbindung testen"), form];
+}
+
 // Verbindung zur Uni: KUSSS neu verbinden oder iCal-Link einfügen
 function openConnection() {
   const me = state.me;
@@ -1201,6 +1230,7 @@ function openConnection() {
       });
       body.append(header("KUSSS"), form);
     }
+    if (me.uni.probe && !me.demo) body.append(...probeSection(me));
     const form = el("form");
     const url = el("input"); url.type = "url"; url.name = "ical_url"; url.placeholder = "https://…"; url.autocomplete = "off"; url.className = "field";
     const btn = el("button", "row row-btn", "Link speichern"); btn.type = "submit";
