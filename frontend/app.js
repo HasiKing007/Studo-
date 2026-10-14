@@ -23,7 +23,7 @@ const fmtAvg = new Intl.NumberFormat("de-AT", { minimumFractionDigits: 2, maximu
 // Service Worker: lädt neue Versionen im Hintergrund. Ob eine neuere Version online ist, prüft die
 // App selbst (Versionsnummer in sw.js), denn iOS meldet einen Wechsel des Service Workers nicht
 // zuverlässig. Dann erscheint oben ein Banner wie eine iOS-Mitteilung mit Knopf zum Neustarten.
-const BUILD = "studo-v21"; // muss zu VERSION in sw.js passen (Test prüft das)
+const BUILD = "studo-v22"; // muss zu VERSION in sw.js passen (Test prüft das)
 let swReg = null;
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").then((reg) => { swReg = reg; }).catch(() => {});
@@ -779,18 +779,25 @@ async function loadDeadlines() {
   if (!state.deadlines || Date.now() - state.deadlines.at > 60_000) state.deadlines = { at: Date.now(), list: await api("/api/deadlines") };
   return state.deadlines.list;
 }
+async function loadRegs() {
+  if (!state.me?.uni?.auto) return { items: [] };
+  if (!state.regs || Date.now() - state.regs.at > 60_000) state.regs = { at: Date.now(), ...(await api("/api/exam-regs")) };
+  return state.regs;
+}
 function dueText(s, now = new Date()) {
   const n = Math.round((midnight(s) - midnight(now)) / 86400000);
   return n <= 1 ? `${inDays(s)}, ${fmtTime.format(s)}` : `in ${n} Tagen`;
 }
 async function renderExams(now) {
-  const [evs, dls] = await Promise.all([
+  const [evs, dls, regs] = await Promise.all([
     fetchEvents(now, addDays(midnight(now), 150)).then((l) => l.filter((e) => e.tag && e.status !== "cancelled")),
     loadDeadlines().catch(() => []),
+    loadRegs().catch(() => ({ items: [] })),
   ]);
   const items = [
     ...evs.map((e) => ({ at: new Date(e.start), title: tagName(e), open: () => openEvent(e) })),
     ...dls.filter((d) => !d.done && new Date(d.due) > now).map((d) => ({ at: new Date(d.due), title: `Abgabe: ${d.title}`, open: () => openDeadline(d) })),
+    ...regs.items.filter((x) => !x.registered).map((x) => ({ at: new Date(x.until), title: `Anmeldung: ${x.title}`, open: () => openReg(x) })),
   ].sort((a, b) => a.at - b.at).slice(0, 8);
   $("#exams-head").hidden = $("#exam-list").hidden = !items.length;
   $("#exam-list").replaceChildren(...items.map((it) => {
@@ -821,6 +828,29 @@ function openDeadline(d) {
       a.append(el("span", "", "Moodle öffnen"), chev());
       body.append(el("div", "group-spaced"), group(a));
     }
+  });
+}
+
+// Prüfungsanmeldung aus KUSSS: Frist und Prüfungstermin
+function openReg(x) {
+  pushPage(x.title, (body) => {
+    const until = new Date(x.until);
+    const head = el("div", "page-head");
+    head.append(el("h1", "", `Anmeldung: ${x.title}`), el("p", "", `Anmeldung bis ${fmtDay.format(until)} · ${fmtTime.format(until)}`));
+    body.append(head);
+    const ex = x.exam_date && new Date(x.exam_date);
+    body.append(group(
+      row("Endet", dueText(until)),
+      ex ? row("Prüfung", `${fmtDayShort.format(ex)}, ${fmtTime.format(ex)}`) : null,
+      x.nr ? row("LVA-Nr.", x.nr) : null,
+    ));
+    const kusss = (state.me.links || []).find((l) => l.id === "kusss");
+    if (kusss) {
+      const a = el("a", "row row-nav"); a.href = kusss.url; a.target = "_blank"; a.rel = "noopener";
+      a.append(el("span", "", "In KUSSS anmelden"), chev());
+      body.append(el("div", "group-spaced"), group(a));
+    }
+    body.append(note("Die Fristen kommen aus KUSSS und werden bei jedem Holen von Kalender und Noten aktualisiert. Nach der Anmeldung verschwindet der Eintrag beim nächsten Mal."));
   });
 }
 
@@ -1426,7 +1456,7 @@ function openGradesRefresh() {
   formPage("Noten aus KUSSS", [
     { name: "password", label: "JKU-Passwort", type: "password", required: true, autocomplete: "current-password", placeholder: "Passwort" },
   ], "Noten laden", async (v) => {
-    state.gradesData = await post("/api/grades/refresh", { password: v.password });
+    state.gradesData = await post("/api/grades/refresh", { password: v.password }); state.regs = null;
     await loadMe();
   }, "Studo+ meldet sich einmal bei KUSSS an und liest die Notenauskunft und deinen Namen. Das Passwort wird nicht gespeichert.");
 }
@@ -1507,11 +1537,24 @@ function openConnection() {
       form.append(group(pw, btn), note("Studo+ meldet sich einmal bei KUSSS an. Das Passwort wird nicht gespeichert."), err);
       form.addEventListener("submit", async (e) => {
         e.preventDefault(); btn.textContent = "Verbinde mit KUSSS …"; btn.disabled = true; err.textContent = "";
-        try { await post("/api/jku/connect", { password: pw.value }); await loadMe(); state.gradesData = null; navLockUntil = 0; goBack(); }
+        try { await post("/api/jku/connect", { password: pw.value }); await loadMe(); state.gradesData = null; state.regs = null; navLockUntil = 0; goBack(); }
         catch (x) { err.textContent = x.message; }
         btn.textContent = "Kalender, Noten und Name holen"; btn.disabled = false;
       });
       body.append(header("KUSSS"), form);
+      loadRegs().then((r) => {
+        if (!r.synced) return;
+        const rows = [row("Anmeldefristen", r.items.length ? `${r.items.length} gefunden` : "keine gefunden"), row("Zuletzt geholt", ago(r.synced))];
+        const box = [header("Prüfungsanmeldungen"), group(...rows)];
+        if (!r.items.length && r.diag) {
+          const copy = el("button", "row row-btn", "Diagnose für Jacob kopieren");
+          copy.addEventListener("click", async () => {
+            try { await navigator.clipboard.writeText(r.diag); copy.textContent = "Kopiert ✓"; haptic(); } catch { copy.textContent = "Kopieren nicht möglich"; }
+          });
+          box.push(group(copy), note("Falls in KUSSS Prüfungstermine mit Anmeldung stehen, Studo+ sie aber nicht erkennt: Diesen Text an Jacob schicken. Er enthält nur den Aufbau der Seite, keine Namen oder Noten."));
+        }
+        form.after(...box);
+      }).catch(() => {});
     }
     if (me.uni.probe && !me.demo) body.append(...probeSection(me));
     const form = el("form");

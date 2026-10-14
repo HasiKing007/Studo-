@@ -3,9 +3,9 @@
 // Uni-Kalender ab, auch wenn niemand die App öffnet. Nutzungszahlen gehen an die Registry.
 
 import { DurableObject } from "cloudflare:workers";
-import { buildCalendar, parseICS } from "./ical.js";
+import { buildCalendar, parseICS, viennaToUtc } from "./ical.js";
 import { formatRoom, parseRoom } from "./rooms.js";
-import { demoDeadlines, demoEvents } from "./demo.js";
+import { demoDeadlines, demoEvents, demoExamRegs } from "./demo.js";
 import { jkuConnect, parseGrade } from "./jku.js";
 import { fetchMensa } from "./mensa.js";
 import { isMoodleLink, parseMoodle } from "./moodle.js";
@@ -50,6 +50,11 @@ CREATE TABLE IF NOT EXISTS deadlines (
 -- Push-Mitteilungen: ein Abo pro Gerät, Protokoll gegen doppelte Erinnerungen
 CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, p256dh TEXT NOT NULL, auth TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS push_log (key TEXT PRIMARY KEY, sent_at TEXT NOT NULL);
+-- Prüfungstermine mit Anmeldefrist aus KUSSS (bei jedem KUSSS-Login neu gelesen)
+CREATE TABLE IF NOT EXISTS exam_regs (
+  key TEXT PRIMARY KEY, nr TEXT, title TEXT NOT NULL, exam_date TEXT, until TEXT NOT NULL,
+  registered INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
 -- Kursübersicht bleibt erhalten, auch wenn alte Termine aufgeräumt werden (Semesterfilter)
 CREATE TABLE IF NOT EXISTS courses (
@@ -301,6 +306,12 @@ export class StudoStore extends DurableObject {
         due.push({ key: `ex:${r.uid}:${r.start}`, title: `${TAGS[tag]} ${whenText(r.start, now)}`, body: where ? `${r.title} · ${where}` : r.title });
       }
     }
+    if (prefs.exams) {
+      const until48 = new Date(now.getTime() + 48 * 3600_000).toISOString();
+      for (const x of this.sql.exec("SELECT * FROM exam_regs WHERE registered=0 AND until > ? AND until <= ?", from, until48).toArray()) {
+        due.push({ key: `reg:${x.key}:${x.until}`, title: `Anmeldung endet ${whenText(x.until, now)}`, body: x.exam_date ? `${x.title} · Prüfung ${whenText(x.exam_date, now)}` : x.title });
+      }
+    }
     const fresh = due.filter((m) => !this.sql.exec("SELECT 1 FROM push_log WHERE key=?", m.key).toArray().length);
     for (const m of fresh) this.sql.exec("INSERT INTO push_log(key, sent_at) VALUES(?,?)", m.key, from);
     this.sql.exec("DELETE FROM push_log WHERE sent_at < ?", new Date(now.getTime() - 60 * 86400_000).toISOString());
@@ -433,6 +444,31 @@ export class StudoStore extends DurableObject {
       this.setSetting("ical_source", "auto");
     }
     this.storeGrades(r.grades);
+    if (r.exams) this.storeExams(r.exams);
+  }
+
+  storeExams({ items, diag }) {
+    const stamp = new Date().toISOString();
+    const utc = (v) => { const m = v && v.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/); return m ? viennaToUtc(+m[1], +m[2], +m[3], +m[4], +m[5]).toISOString() : null; };
+    this.sql.exec("DELETE FROM exam_regs");
+    for (const x of items) {
+      const until = utc(x.until);
+      if (!until) continue;
+      const examDate = utc(x.date);
+      this.sql.exec(`INSERT OR REPLACE INTO exam_regs(key, nr, title, exam_date, until, registered, updated_at) VALUES(?,?,?,?,?,?,?)`,
+        `${x.nr || x.title}|${examDate || until}`, x.nr, x.title, examDate, until, x.registered ? 1 : 0, stamp);
+    }
+    this.setSetting("exams_synced", stamp);
+    this.setSetting("kusss_exam_diag", diag || null);
+  }
+
+  examRegsPayload() {
+    return {
+      items: this.sql.exec("SELECT * FROM exam_regs WHERE until > ? ORDER BY until", new Date().toISOString()).toArray()
+        .map((x) => ({ ...x, registered: !!x.registered })),
+      synced: this.getSetting("exams_synced"),
+      diag: this.getSetting("kusss_exam_diag"),
+    };
   }
 
   gradesPayload() {
@@ -516,6 +552,7 @@ export class StudoStore extends DurableObject {
     this.track("login", { uni, username });
     this.ctx.waitUntil(this.sync().catch(() => {}));
     this.ctx.waitUntil(this.syncMoodle().catch(() => {}));
+    if (this.env.DEMO === "1") this.storeExams({ items: demoExamRegs(), diag: null });
     return { ok: true, token, firstLogin };
   }
 
@@ -570,6 +607,11 @@ export class StudoStore extends DurableObject {
       uid: `moodle-${d.uid}`, summary: `Abgabe: ${d.title}`, start: d.due, end: d.due, stamp: now,
       lastModified: d.updated_at, sequence: 0, status: "CONFIRMED", location: null,
       description: [d.course, d.note].filter(Boolean).join("\n") || null, categories: ["Abgabe"], priority: 1,
+    }))).concat(this.sql.exec("SELECT * FROM exam_regs WHERE registered=0 AND until >= ?", since).toArray().map((x) => ({
+      // Ende der Prüfungsanmeldung in KUSSS
+      uid: `reg-${x.key}@studo.plus`, summary: `Anmeldeschluss: ${x.title}`, start: x.until, end: x.until, stamp: now,
+      lastModified: x.updated_at, sequence: 0, status: "CONFIRMED", location: null,
+      description: x.exam_date ? `Prüfung: ${viennaWeekday.format(new Date(x.exam_date))} ${viennaTime.format(new Date(x.exam_date))}` : null, categories: ["Anmeldung"], priority: 1,
     }))));
   }
 
@@ -722,6 +764,8 @@ export class StudoStore extends DurableObject {
       if (!sent) return error(502, "Die Mitteilung konnte nicht zugestellt werden. Schalte Mitteilungen aus und wieder ein.");
       return json({ sent });
     }
+
+    if (path === "/api/exam-regs" && method === "GET") return json(this.examRegsPayload());
 
     if (path === "/api/mensa" && method === "GET") {
       return json({ canteens: this.uni.mensa?.length ? await fetchMensa(this.uni.mensa) : [] });
