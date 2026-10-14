@@ -23,7 +23,7 @@ const fmtAvg = new Intl.NumberFormat("de-AT", { minimumFractionDigits: 2, maximu
 // Service Worker: lädt neue Versionen im Hintergrund. Ob eine neuere Version online ist, prüft die
 // App selbst (Versionsnummer in sw.js), denn iOS meldet einen Wechsel des Service Workers nicht
 // zuverlässig. Dann erscheint oben ein Banner wie eine iOS-Mitteilung mit Knopf zum Neustarten.
-const BUILD = "studo-v28"; // muss zu VERSION in sw.js passen (Test prüft das)
+const BUILD = "studo-v29"; // muss zu VERSION in sw.js passen (Test prüft das)
 let swReg = null;
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").then((reg) => { swReg = reg; }).catch(() => {});
@@ -102,6 +102,9 @@ function updateStatusColor() {
   const onHero = uni && state.tab === "home" && !stack.length && scrollY < 40 && !$("#app").hidden;
   document.documentElement.dataset.hero = uni || "";
   document.documentElement.classList.toggle("hero-tab", state.tab === "home");
+  document.documentElement.classList.toggle("hero-at-top", !!onHero);
+  const login = $("#login");
+  document.documentElement.classList.toggle("login-photo", !login.hidden && !!HERO_TOP[login.dataset.uni]);
   document.documentElement.style.setProperty("--hero-top", uni ? HERO_TOP[uni][dark ? "dark" : "light"] : "transparent");
   setStatusColor(onHero ? HERO_TOP[uni][dark ? "dark" : "light"] : dark ? "#000000" : "#F2F2F7");
 }
@@ -503,6 +506,7 @@ function updateLoginHint() {
   if (!u) return;
   $("#uni-name").textContent = u.name;
   $("#login").dataset.uni = u.id; // Hintergrundfoto je Hochschule
+  updateStatusColor();
   const credit = $("#photo-credit"), parts = photoCredit(u.id);
   credit.hidden = !parts;
   if (parts) credit.replaceChildren(...parts);
