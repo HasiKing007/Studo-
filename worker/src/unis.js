@@ -38,6 +38,7 @@ export const UNIS = {
     auth: "local",
     userLabel: "u:account",
     userPlaceholder: "a12345678",
+    probe: { start: ["https://uspace.univie.ac.at/", "https://uspace.univie.ac.at/web/studierende/"] }, // Testmodus, bis die Anbindung fertig ist
     icalHint: "u:space → Stundenplan → Kalender abonnieren (iCal), Link kopieren.",
     links: [
       { id: "uspace", name: "u:space", url: "https://uspace.univie.ac.at/", icon: "grid" },
@@ -98,6 +99,7 @@ export const UNIS = {
     auth: "local",
     userLabel: "Benutzername",
     userPlaceholder: "Benutzername",
+    probe: { start: ["https://online.uni-salzburg.at/plus_online/ee/ui/ca2/app/desktop/", "https://online.uni-salzburg.at/plus_online/webnav.ini", "https://online.uni-salzburg.at/"] }, // Testmodus, bis die Anbindung fertig ist
     icalHint: "PLUSonline → Mein Kalender → Exportieren / Abonnieren, Link kopieren.",
     links: [
       { id: "online", name: "PLUSonline", url: "https://online.uni-salzburg.at/", icon: "grid" },
@@ -110,6 +112,7 @@ export const UNIS = {
     auth: "local",
     userLabel: "Matrikelnummer",
     userPlaceholder: "Matrikelnummer",
+    probe: { start: ["https://www.bruckneruni.at/de/services/online-services", "https://www.bruckneruni.at/"] }, // Testmodus, bis die Anbindung fertig ist
     icalHint: "bruckner online → Mein Kalender → Exportieren / Abonnieren, Link kopieren.",
     links: [
       { id: "online", name: "Online-Services", url: "https://www.bruckneruni.at/de/services/online-services", icon: "grid" },
