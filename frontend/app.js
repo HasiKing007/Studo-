@@ -23,7 +23,7 @@ const fmtAvg = new Intl.NumberFormat("de-AT", { minimumFractionDigits: 2, maximu
 // Service Worker: lädt neue Versionen im Hintergrund. Ob eine neuere Version online ist, prüft die
 // App selbst (Versionsnummer in sw.js), denn iOS meldet einen Wechsel des Service Workers nicht
 // zuverlässig. Dann erscheint oben ein Banner wie eine iOS-Mitteilung mit Knopf zum Neustarten.
-const BUILD = "studo-v24"; // muss zu VERSION in sw.js passen (Test prüft das)
+const BUILD = "studo-v25"; // muss zu VERSION in sw.js passen (Test prüft das)
 let swReg = null;
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").then((reg) => { swReg = reg; }).catch(() => {});
@@ -462,6 +462,7 @@ async function loadUnis() {
 function updateLoginHint() {
   const u = state.unis.find((x) => x.id === $("#login-uni").value);
   if (!u) return;
+  $("#uni-name").textContent = u.name;
   const user = $("#login-user");
   user.placeholder = u.userLabel; user.setAttribute("aria-label", u.userLabel);
   $("#login-hint").textContent = u.auto
@@ -469,6 +470,39 @@ function updateLoginHint() {
     : `Beim ersten Login legst du ein eigenes Passwort fest und verbindest danach deinen Stundenplan per iCal-Link.`;
 }
 $("#login-uni").addEventListener("change", updateLoginHint);
+$("#uni-pick").append(chev());
+
+// Hochschul-Auswahl als Blatt von unten statt des Browser-Auswahlfelds (sieht auf jedem Gerät gleich aus)
+$("#uni-pick").addEventListener("click", () => {
+  if (!state.unis.length || $(".sheet")) return;
+  haptic();
+  const sel = $("#login-uni");
+  const backdrop = el("div", "sheet-backdrop");
+  const sheet = el("div", "sheet uni-sheet");
+  sheet.setAttribute("role", "dialog"); sheet.setAttribute("aria-label", "Hochschule wählen");
+  const close = () => {
+    backdrop.classList.remove("in"); sheet.classList.remove("in");
+    setTimeout(() => { backdrop.remove(); sheet.remove(); }, 380);
+    removeEventListener("keydown", onKey);
+  };
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  sheet.append(el("div", "sheet-grab"), el("h2", "sheet-title", "Hochschule wählen"), group(...state.unis.map((u) => {
+    const b = el("button", "row uni-opt"); b.type = "button"; b.dataset.uni = u.id;
+    const t = el("span", "course-text");
+    t.append(el("span", "course-title", u.name), el("span", "course-sub", u.auto ? "Stundenplan, Noten und Name automatisch" : u.id === "other" ? "Stundenplan per Kalender-Link" : "Stundenplan per Kalender-Link, Anbindung im Test"));
+    b.append(t);
+    if (u.id === sel.value) { b.classList.add("on"); b.append(svg('<path d="M5 12.5l4.5 4.5L19 7.5"/>', "check")); }
+    b.addEventListener("click", () => {
+      sel.value = u.id; updateLoginHint(); haptic(); close();
+      try { localStorage.setItem("studo_uni", u.id); } catch {}
+    });
+    return b;
+  })));
+  backdrop.addEventListener("click", close);
+  addEventListener("keydown", onKey);
+  document.body.append(backdrop, sheet);
+  requestAnimationFrame(() => requestAnimationFrame(() => { backdrop.classList.add("in"); sheet.classList.add("in"); }));
+});
 
 $("#login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -537,13 +571,13 @@ async function renderAdmin(data) {
   $("#admin-users").replaceChildren(...(data.users.length ? data.users.map((u) => {
     const r = el("div", "row user-row");
     const head = el("div", "user-head");
-    const name = el("strong", "", u.username);
+    const name = el("strong", "", u.name || u.username);
     if (u.verified) name.append(el("span", "badge ok", "bestätigt"));
     if (!u.connected) name.append(el("span", "badge", "ohne Stundenplan"));
     const last = [u.last_open, u.last_login, u.last_feed].filter(Boolean).sort().pop();
     head.append(name, el("span", "muted", ago(last)));
     r.append(head,
-      el("div", "user-meta", `${names[u.uni] || u.uni} · seit ${new Date(u.created_at).toLocaleDateString("de-AT")}`),
+      el("div", "user-meta", `${u.name ? `${u.username} · ` : ""}${names[u.uni] || u.uni} · seit ${new Date(u.created_at).toLocaleDateString("de-AT")}`),
       el("div", "user-meta", `${u.logins} Logins · ${u.opens}× geöffnet · ${u.feed_hits} Kalender-Abrufe · ${u.events} Termine`));
     return r;
   }) : [el("div", "row muted", "Noch keine Konten.")]));
@@ -656,10 +690,13 @@ const EASE = "cubic-bezier(.25,.8,.25,1)";
 addEventListener("scroll", () => $$(".appbar").forEach((a) => a.classList.toggle("scrolled", scrollY > 40)), { passive: true });
 
 async function fetchEvents(from, to) {
-  return api(`/api/events?start=${encodeURIComponent(from.toISOString())}&end=${encodeURIComponent(to.toISOString())}`);
+  return api(`/api/schedule?start=${encodeURIComponent(from.toISOString())}&end=${encodeURIComponent(to.toISOString())}`);
 }
 function errorBox(box, err, what = "Termine") {
-  box.replaceChildren(el("div", "row empty-row", `${what} konnten nicht geladen werden: ${err.message}`));
+  const offline = /failed to fetch|load failed|networkerror|keine verbindung/i.test(err.message);
+  box.replaceChildren(el("div", "row empty-row", offline
+    ? `${what} konnten nicht geladen werden, keine Verbindung zum Server. Ist ein Werbeblocker aktiv, Studo+ dort bitte erlauben.`
+    : `${what} konnten nicht geladen werden: ${err.message}`));
 }
 
 // ---------- Termin-Zeile und Termin-Seite ----------

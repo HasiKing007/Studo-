@@ -524,3 +524,44 @@ a.row { color: inherit; text-decoration: none; }
 .dot.on { background: #34C759; opacity: 1; box-shadow: 0 0 0 3px color-mix(in srgb, #34C759 22%, transparent); }
 .notice-row { font-size: 14px; color: var(--accent); line-height: 1.35; }
 .news-row .meal-name { font-size: 15px; }
+
+/* ---------- Anmeldeseite: weicher Farbverlauf, Glas-Gruppen, Auswahl als Blatt ---------- */
+#login { position: relative; isolation: isolate; overflow: hidden; }
+#login::before {
+  content: ""; position: absolute; inset: -25%; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(38% 30% at 22% 18%, color-mix(in srgb, var(--accent) 30%, transparent), transparent 70%),
+    radial-gradient(42% 34% at 85% 34%, rgba(255, 159, 10, .22), transparent 70%),
+    radial-gradient(48% 40% at 55% 92%, color-mix(in srgb, var(--accent) 20%, transparent), transparent 72%);
+  filter: blur(36px); animation: login-drift 22s ease-in-out infinite alternate;
+}
+@keyframes login-drift { to { transform: translate3d(3%, -2%, 0) rotate(6deg) scale(1.06); } }
+#login .wordmark { font-size: 46px; }
+#login .group {
+  background: color-mix(in srgb, var(--card) 70%, transparent);
+  -webkit-backdrop-filter: saturate(170%) blur(24px); backdrop-filter: saturate(170%) blur(24px);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, .06), 0 0 0 .5px color-mix(in srgb, var(--text) 8%, transparent);
+}
+#login .field, #login .row { background-color: transparent; }
+#login .btn-primary { box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 35%, transparent); }
+#uni-pick { width: 100%; text-align: left; }
+#uni-pick > span:first-child { flex: none; }
+#uni-pick .value { margin-left: auto; color: var(--muted); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-left: 12px; }
+
+.sheet-backdrop { position: fixed; inset: 0; z-index: 80; background: rgba(0, 0, 0, .32); opacity: 0; transition: opacity .3s ease; }
+.sheet-backdrop.in { opacity: 1; }
+.sheet {
+  position: fixed; z-index: 81; left: 0; right: 0; bottom: 0; max-width: 520px; margin: 0 auto;
+  background: var(--bg); border-radius: 14px 14px 0 0; padding: 6px 16px calc(20px + env(safe-area-inset-bottom));
+  transform: translateY(105%); transition: transform .38s var(--spring); box-shadow: 0 -10px 40px rgba(0, 0, 0, .18);
+}
+.sheet.in { transform: none; }
+.sheet-grab { width: 36px; height: 5px; border-radius: 3px; background: var(--sep); margin: 0 auto 12px; }
+.sheet-title { font-size: 17px; font-weight: 600; text-align: center; margin: 0 0 14px; }
+.uni-opt { width: 100%; text-align: left; }
+.uni-opt .check { width: 20px; height: 20px; flex: none; margin-left: auto; fill: none; stroke: var(--accent); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Am Laptop: Tab-Leiste auf die Inhaltsbreite zusammenziehen statt über den ganzen Bildschirm */
+@media (min-width: 760px) {
+  .tabbar { padding-left: calc((100% - 600px) / 2); padding-right: calc((100% - 600px) / 2); }
+}
