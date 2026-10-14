@@ -2,6 +2,7 @@
 // Login-Rate-Limit. Hier liegen nur Nutzungszahlen, keine Termine und keine Links.
 
 import { DurableObject } from "cloudflare:workers";
+import { generateVapid } from "./webpush.js";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
@@ -37,6 +38,13 @@ export class Registry extends DurableObject {
   }
 
   // ---------- Rate-Limit (pro IP, über alle Konten) ----------
+
+  /** Gemeinsames VAPID-Schlüsselpaar für Push-Mitteilungen, wird beim ersten Bedarf erzeugt. */
+  async vapid() {
+    let v = await this.ctx.storage.get("vapid");
+    if (!v) { v = await generateVapid(); await this.ctx.storage.put("vapid", v); }
+    return v;
+  }
 
   isBlocked(ip) {
     const since = Date.now() - FAIL_WINDOW;

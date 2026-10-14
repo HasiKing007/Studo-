@@ -10,14 +10,18 @@ import { jkuConnect, parseGrade } from "./jku.js";
 import { fetchMensa } from "./mensa.js";
 import { isMoodleLink, parseMoodle } from "./moodle.js";
 import { probeLogin } from "./probe.js";
+import { sendPush } from "./webpush.js";
 import { TAGS, detectTag } from "./tags.js";
 import { UNIS, matrikel } from "./unis.js";
 import { error, hashPassword, json, parseSession, randomToken, sha256, timingSafeEqual, verifyPassword } from "./util.js";
 
 // Tagsüber (6–22 Uhr Wien) alle 10 Minuten, nachts stündlich: Raumänderungen kommen so rasch an
 const SYNC_DAY_MINUTES = 10, SYNC_NIGHT_MINUTES = 60;
-function nextSyncDelay(now = new Date()) {
-  const h = +new Intl.DateTimeFormat("de-AT", { hour: "numeric", hour12: false, timeZone: "Europe/Vienna" }).format(now);
+// Stunde in Wien als Zahl ("de-AT" formatiert "12 Uhr", daher über formatToParts)
+const hourFmt = new Intl.DateTimeFormat("en-GB", { hour: "numeric", hourCycle: "h23", timeZone: "Europe/Vienna" });
+const viennaHour = (d = new Date()) => +hourFmt.formatToParts(d).find((p) => p.type === "hour").value;
+export function nextSyncDelay(now = new Date()) {
+  const h = viennaHour(now);
   return (h >= 6 && h < 22 ? SYNC_DAY_MINUTES : SYNC_NIGHT_MINUTES) * 60_000;
 }
 export const SESSION_DAYS = 90;
@@ -43,6 +47,9 @@ CREATE TABLE IF NOT EXISTS deadlines (
   uid TEXT PRIMARY KEY, title TEXT NOT NULL, course TEXT, due TEXT NOT NULL, note TEXT,
   done INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
 );
+-- Push-Mitteilungen: ein Abo pro Gerät, Protokoll gegen doppelte Erinnerungen
+CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, p256dh TEXT NOT NULL, auth TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS push_log (key TEXT PRIMARY KEY, sent_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
 -- Kursübersicht bleibt erhalten, auch wenn alte Termine aufgeräumt werden (Semesterfilter)
 CREATE TABLE IF NOT EXISTS courses (
@@ -91,6 +98,21 @@ export function semesterKey(sem) {
   return m ? +m[2] * 2 + (m[1] === "WS" ? 1 : 0) : 0;
 }
 
+// ---------- Texte für Mitteilungen (Wiener Zeit) ----------
+const viennaDay = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Vienna", year: "numeric", month: "2-digit", day: "2-digit" });
+const viennaTime = new Intl.DateTimeFormat("de-AT", { timeZone: "Europe/Vienna", hour: "2-digit", minute: "2-digit" });
+const viennaWeekday = new Intl.DateTimeFormat("de-AT", { timeZone: "Europe/Vienna", weekday: "short", day: "numeric", month: "numeric" });
+
+/** "heute 08:30", "morgen 12:00", "Mo., 19.10. 08:30" */
+export function whenText(date, now = new Date()) {
+  const d = new Date(date);
+  const days = Math.round((Date.parse(viennaDay.format(d)) - Date.parse(viennaDay.format(now))) / 86400_000);
+  const day = days === 0 ? "heute" : days === 1 ? "morgen" : viennaWeekday.format(d);
+  return `${day} ${viennaTime.format(d)}`;
+}
+const EXAM_TAGS = new Set(["klausur", "teilklausur", "nachklausur", "vortrag", "praesentation"]);
+const PUSH_WINDOW = 7 * 86400_000; // Änderungen nur für Termine der nächsten 7 Tage melden
+
 export class StudoStore extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
@@ -133,6 +155,7 @@ export class StudoStore extends DurableObject {
     if (!this.exists) return; // gelöschtes oder nie angelegtes Konto: nicht weiterlaufen
     try { await this.sync(); } catch (e) { console.warn("Sync fehlgeschlagen:", e.message); }
     try { await this.syncMoodle(); } catch (e) { console.warn("Moodle-Sync fehlgeschlagen:", e.message); }
+    try { await this.remind(); } catch (e) { console.warn("Erinnerungen fehlgeschlagen:", e.message); }
     finally { await this.ctx.storage.setAlarm(Date.now() + nextSyncDelay()); }
   }
 
@@ -166,6 +189,7 @@ export class StudoStore extends DurableObject {
       throw e;
     }
     this.track("sync", { events: stats.total });
+    if (stats.notes.length) await this.notifyChanges(stats.notes).catch((e) => console.warn("Push:", e.message));
     return stats;
   }
 
@@ -215,6 +239,74 @@ export class StudoStore extends DurableObject {
       .toArray().map((d) => ({ ...d, done: !!d.done }));
   }
 
+  // ---------- Push-Mitteilungen ----------
+
+  pushPrefs() {
+    return {
+      changes: this.getSetting("push_changes", "1") === "1",
+      deadlines: this.getSetting("push_deadlines", "1") === "1",
+      exams: this.getSetting("push_exams", "1") === "1",
+    };
+  }
+
+  async vapid() {
+    if (!this.vapidKeys) this.vapidKeys = await this.env.REGISTRY.get(this.env.REGISTRY.idFromName("global")).vapid();
+    return this.vapidKeys;
+  }
+
+  /** An alle Geräte des Kontos senden; abgelaufene Abos werden entfernt. Liefert die Zahl der Zustellungen. */
+  async push(messages, only = null) {
+    const subs = this.sql.exec("SELECT endpoint, p256dh, auth FROM push_subs").toArray().filter((s) => !only || s.endpoint === only);
+    if (!subs.length || !messages.length) return 0;
+    const vapid = await this.vapid();
+    const subject = this.getSetting("app_origin") || "https://github.com/HasiKing007/Studo-";
+    let sent = 0;
+    for (const s of subs) {
+      for (const m of messages) {
+        const r = await sendPush({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, { url: "/", ...m }, vapid, subject);
+        if (r === "gone") { this.sql.exec("DELETE FROM push_subs WHERE endpoint=?", s.endpoint); break; }
+        if (r === "ok") sent++;
+      }
+    }
+    return sent;
+  }
+
+  async notifyChanges(notes) {
+    if (!this.pushPrefs().changes) return;
+    // Viele Änderungen auf einmal: eine Sammelmitteilung statt einer Flut
+    const msgs = notes.length > 4
+      ? [{ title: `${notes.length} Termine geändert`, body: "Öffne Studo+ für die Details.", tag: "chg:many" }]
+      : notes;
+    await this.push(msgs);
+  }
+
+  /** Erinnerungen 24 Stunden vor Abgaben und Prüfungen (nicht nachts, jede nur einmal). */
+  async remind(now = new Date()) {
+    if (!this.sql.exec("SELECT 1 FROM push_subs LIMIT 1").toArray().length) return;
+    const h = viennaHour(now);
+    if (h < 7 || h >= 22) return;
+    const prefs = this.pushPrefs();
+    const from = now.toISOString(), until = new Date(now.getTime() + 24 * 3600_000).toISOString();
+    const due = [];
+    if (prefs.deadlines) {
+      for (const d of this.sql.exec("SELECT * FROM deadlines WHERE done=0 AND due > ? AND due <= ?", from, until).toArray()) {
+        due.push({ key: `dl:${d.uid}:${d.due}`, title: `Abgabe ${whenText(d.due, now)}`, body: d.course ? `${d.title} · ${d.course}` : d.title });
+      }
+    }
+    if (prefs.exams) {
+      for (const r of this.sql.exec(`${EFFECTIVE} WHERE e.start > ? AND e.start <= ? AND e.status='confirmed'`, from, until).toArray()) {
+        const { tag } = eventTag(r);
+        if (!EXAM_TAGS.has(tag)) continue;
+        const where = formatRoom(r.building, r.room) || r.room_raw;
+        due.push({ key: `ex:${r.uid}:${r.start}`, title: `${TAGS[tag]} ${whenText(r.start, now)}`, body: where ? `${r.title} · ${where}` : r.title });
+      }
+    }
+    const fresh = due.filter((m) => !this.sql.exec("SELECT 1 FROM push_log WHERE key=?", m.key).toArray().length);
+    for (const m of fresh) this.sql.exec("INSERT INTO push_log(key, sent_at) VALUES(?,?)", m.key, from);
+    this.sql.exec("DELETE FROM push_log WHERE sent_at < ?", new Date(now.getTime() - 60 * 86400_000).toISOString());
+    if (fresh.length) await this.push(fresh.map(({ key, ...m }) => ({ ...m, tag: key })));
+  }
+
   room(raw) {
     return this.uni.rooms === "jku" ? parseRoom(raw) : [null, raw ? raw.replace(/\\,/g, ",").trim() : null];
   }
@@ -223,14 +315,16 @@ export class StudoStore extends DurableObject {
   async apply(events) {
     const now = new Date();
     const stamp = now.toISOString();
-    const stats = { new: 0, changed: 0, cancelled: 0, total: events.length };
+    const stats = { new: 0, changed: 0, cancelled: 0, total: events.length, notes: [] };
     const seen = new Set();
+    const watchUntil = now.getTime() + PUSH_WINDOW;
+    const soon = (iso) => { const t = Date.parse(iso); return t > now.getTime() && t < watchUntil; };
 
     for (const e of events) {
       const [building, room] = this.room(e.location);
       const fp = await sha256([e.title, e.kind, e.start.toISOString(), e.end.toISOString(), building, room, e.cancelled].join("|"));
       seen.add(e.uid);
-      const row = this.sql.exec("SELECT fingerprint, sequence FROM events WHERE uid=?", e.uid).toArray()[0];
+      const row = this.sql.exec(`SELECT fingerprint, sequence, start, building, room, room_raw, status FROM events WHERE uid=?`, e.uid).toArray()[0];
       const v = [e.courseId, e.title, e.kind, e.start.toISOString(), e.end.toISOString(), e.location, building, room,
         e.description, e.cancelled ? "cancelled" : "confirmed", fp, stamp, stamp];
       if (!row) {
@@ -238,6 +332,15 @@ export class StudoStore extends DurableObject {
           fingerprint,last_seen,updated_at,uid,sequence) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`, ...v, e.uid);
         stats.new++;
       } else if (row.fingerprint !== fp) {
+        const name = `${e.kind ? `${e.kind} ` : ""}${e.title}`, start = e.start.toISOString();
+        const oldRoom = formatRoom(row.building, row.room) || row.room_raw, newRoom = formatRoom(building, room) || e.location;
+        if (e.cancelled && row.status !== "cancelled" && soon(row.start)) {
+          stats.notes.push({ title: `Entfällt: ${name}`, body: whenText(row.start, now), tag: `chg:${e.uid}` });
+        } else if (!e.cancelled && row.start !== start && (soon(row.start) || soon(start))) {
+          stats.notes.push({ title: `Zeitänderung: ${name}`, body: `Jetzt ${whenText(start, now)} statt ${whenText(row.start, now)}${newRoom ? ` · ${newRoom}` : ""}`, tag: `chg:${e.uid}` });
+        } else if (!e.cancelled && (oldRoom || "") !== (newRoom || "") && soon(start)) {
+          stats.notes.push({ title: `Raumänderung: ${name}`, body: `${whenText(start, now)} jetzt in ${newRoom || "unbekanntem Raum"}${oldRoom ? ` (statt ${oldRoom})` : ""}`, tag: `chg:${e.uid}` });
+        }
         this.sql.exec(`UPDATE events SET course_id=?,title=?,kind=?,start=?,"end"=?,room_raw=?,building=?,room=?,
           description=?,status=?,fingerprint=?,last_seen=?,updated_at=?,sequence=sequence+1 WHERE uid=?`, ...v, e.uid);
         stats.changed++;
@@ -247,12 +350,17 @@ export class StudoStore extends DurableObject {
     }
 
     // Zukünftige Termine, die nicht mehr geliefert werden -> als entfallen markieren
-    for (const { uid } of this.sql.exec("SELECT uid FROM events WHERE start > ? AND status='confirmed'", stamp).toArray()) {
+    const vanished = [];
+    for (const { uid, start, title, kind } of this.sql.exec("SELECT uid, start, title, kind FROM events WHERE start > ? AND status='confirmed'", stamp).toArray()) {
       if (!seen.has(uid)) {
+        if (soon(start)) vanished.push({ title: `Entfällt: ${kind ? `${kind} ` : ""}${title}`, body: whenText(start, now), tag: `chg:${uid}` });
         this.sql.exec("UPDATE events SET status='cancelled', sequence=sequence+1, updated_at=? WHERE uid=?", stamp, uid);
         stats.cancelled++;
       }
     }
+    // Viele verschwundene Termine auf einmal sind eher ein Problem des Uni-Exports als echte Ausfälle
+    if (vanished.length <= 3) stats.notes.push(...vanished);
+    if (!events.length) stats.notes = [];
     this.updateCourses(events);
     // Aufräumen: Termine, die älter als ein Semester sind
     this.sql.exec(`DELETE FROM events WHERE "end" < ?`, new Date(now - 180 * 86400_000).toISOString());
@@ -581,6 +689,38 @@ export class StudoStore extends DurableObject {
       const b = await request.json().catch(() => ({}));
       this.sql.exec("UPDATE deadlines SET done=?, updated_at=? WHERE uid=?", b.done ? 1 : 0, new Date().toISOString(), decodeURIComponent(deadline[1]));
       return json(this.deadlinesPayload());
+    }
+
+    if (path === "/api/push" && method === "GET") {
+      const { publicKey } = await this.vapid();
+      return json({ key: publicKey, prefs: this.pushPrefs(), devices: this.sql.exec("SELECT COUNT(*) AS n FROM push_subs").one().n });
+    }
+    if (path === "/api/push/subscribe" && method === "POST") {
+      const { subscription: sub } = await request.json().catch(() => ({}));
+      let host;
+      try { host = new URL(sub?.endpoint).protocol === "https:"; } catch { host = false; }
+      if (!host || !sub.keys?.p256dh || !sub.keys?.auth) return error(422, "Ungültiges Push-Abo.");
+      this.sql.exec(`INSERT INTO push_subs(endpoint, p256dh, auth, created_at) VALUES(?,?,?,?)
+        ON CONFLICT(endpoint) DO UPDATE SET p256dh=excluded.p256dh, auth=excluded.auth`,
+        sub.endpoint, String(sub.keys.p256dh), String(sub.keys.auth), new Date().toISOString());
+      this.setSetting("app_origin", url.origin);
+      return json({ ok: true });
+    }
+    if (path === "/api/push/unsubscribe" && method === "POST") {
+      const { endpoint } = await request.json().catch(() => ({}));
+      this.sql.exec("DELETE FROM push_subs WHERE endpoint=?", String(endpoint || ""));
+      return json({ ok: true });
+    }
+    if (path === "/api/push/prefs" && method === "PUT") {
+      const b = await request.json().catch(() => ({}));
+      for (const k of ["changes", "deadlines", "exams"]) if (typeof b[k] === "boolean") this.setSetting(`push_${k}`, b[k] ? "1" : "0");
+      return json(this.pushPrefs());
+    }
+    if (path === "/api/push/test" && method === "POST") {
+      const { endpoint } = await request.json().catch(() => ({}));
+      const sent = await this.push([{ title: "Studo+", body: "Mitteilungen sind eingerichtet. So sehen Raumänderungen und Erinnerungen aus.", tag: "test" }], endpoint || null);
+      if (!sent) return error(502, "Die Mitteilung konnte nicht zugestellt werden. Schalte Mitteilungen aus und wieder ein.");
+      return json({ sent });
     }
 
     if (path === "/api/mensa" && method === "GET") {

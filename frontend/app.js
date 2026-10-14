@@ -23,7 +23,7 @@ const fmtAvg = new Intl.NumberFormat("de-AT", { minimumFractionDigits: 2, maximu
 // Service Worker: lädt neue Versionen im Hintergrund. Ob eine neuere Version online ist, prüft die
 // App selbst (Versionsnummer in sw.js), denn iOS meldet einen Wechsel des Service Workers nicht
 // zuverlässig. Dann erscheint oben ein Banner wie eine iOS-Mitteilung mit Knopf zum Neustarten.
-const BUILD = "studo-v20"; // muss zu VERSION in sw.js passen (Test prüft das)
+const BUILD = "studo-v21"; // muss zu VERSION in sw.js passen (Test prüft das)
 let swReg = null;
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").then((reg) => { swReg = reg; }).catch(() => {});
@@ -554,6 +554,7 @@ $("#btn-profile").addEventListener("click", openProfile);
 $("#btn-connection").addEventListener("click", openConnection);
 $("#btn-abo").addEventListener("click", openAbo);
 $("#btn-moodle").addEventListener("click", openMoodle);
+$("#btn-push").addEventListener("click", openPush);
 
 // Antippen von Chips und Segmenten: kurzes Einfedern
 document.addEventListener("click", (e) => {
@@ -1565,6 +1566,73 @@ function openMoodle() {
       });
       body.append(el("div", "group-spaced"), group(rm));
     }
+  });
+}
+
+// Mitteilungen (Web Push): Raumänderungen, Ausfälle, Erinnerungen an Abgaben und Prüfungen
+const PUSH_OK = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+const keyBytes = (b64) => Uint8Array.from(atob(b64.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((b64.length + 3) % 4)), (c) => c.charCodeAt(0));
+function openPush() {
+  pushPage("Mitteilungen", async (body) => {
+    const head = el("div", "page-head");
+    head.append(el("h1", "", "Mitteilungen"), el("p", "", "Studo+ meldet sich, wenn sich bei deinen Terminen etwas ändert oder eine Frist näher rückt."));
+    body.append(head);
+    if (!PUSH_OK) {
+      const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+      body.append(group(el("div", "row empty-row", "Auf diesem Gerät nicht verfügbar")),
+        note(ios && !STANDALONE
+          ? "Auf dem iPhone gibt es Mitteilungen nur, wenn Studo+ am Home-Bildschirm liegt: In Safari auf Teilen › „Zum Home-Bildschirm“ tippen und Studo+ dann von dort öffnen."
+          : "Dieser Browser unterstützt keine Mitteilungen."));
+      return;
+    }
+    let info, sub;
+    try { [info, sub] = await Promise.all([api("/api/push"), navigator.serviceWorker.ready.then((r) => r.pushManager.getSubscription())]); }
+    catch (err) { errorBox(body, err); return; }
+    const prefsBox = el("div"), testBtn = el("button", "row row-btn", "Test-Mitteilung senden");
+    const refresh = () => { prefsBox.hidden = !sub; testBtn.disabled = !sub; };
+
+    const devRow = el("label", "row");
+    devRow.append(el("span", "", "Auf diesem Gerät"), makeSwitch(!!sub && Notification.permission === "granted", async (on) => {
+      if (on) {
+        const perm = await Notification.requestPermission();
+        if (perm !== "granted") {
+          throw new Error(perm === "denied"
+            ? "Mitteilungen sind blockiert. Erlaube sie in den Einstellungen deines Geräts unter Mitteilungen › Studo+."
+            : "Mitteilungen wurden nicht erlaubt.");
+        }
+        const reg = await navigator.serviceWorker.ready;
+        sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(info.key) });
+        await post("/api/push/subscribe", { subscription: sub.toJSON() });
+      } else if (sub) {
+        await post("/api/push/unsubscribe", { endpoint: sub.endpoint });
+        await sub.unsubscribe().catch(() => {});
+        sub = null;
+      }
+      refresh();
+    }));
+    body.append(group(devRow));
+
+    const prefRow = (key, label, hint) => {
+      const r = el("label", "row");
+      const t = el("div", "meal-text"); t.append(el("span", "", label), el("span", "meal-cat pref-hint", hint));
+      r.append(t, makeSwitch(info.prefs[key], async (v) => { info.prefs = await put("/api/push/prefs", { [key]: v }); }));
+      return r;
+    };
+    prefsBox.append(header("Worüber"), group(
+      prefRow("changes", "Raumänderungen und Ausfälle", "Termine der nächsten 7 Tage"),
+      prefRow("deadlines", "Abgaben", "24 Stunden vorher"),
+      prefRow("exams", "Prüfungen und Vorträge", "24 Stunden vorher"),
+    ));
+    testBtn.addEventListener("click", async () => {
+      testBtn.disabled = true; testBtn.textContent = "Wird gesendet …";
+      try { await post("/api/push/test", { endpoint: sub.endpoint }); testBtn.textContent = "Gesendet ✓"; haptic(); }
+      catch (err) { testBtn.textContent = "Test-Mitteilung senden"; alert(err.message); }
+      setTimeout(() => { testBtn.textContent = "Test-Mitteilung senden"; testBtn.disabled = !sub; }, 2500);
+    });
+    prefsBox.append(el("div", "group-spaced"), group(testBtn));
+    body.append(prefsBox,
+      note("Neue Noten können leider nicht gemeldet werden: KUSSS gibt sie nur mit deinem Passwort heraus, und das speichert Studo+ bewusst nicht."));
+    refresh();
   });
 }
 
