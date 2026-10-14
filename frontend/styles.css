@@ -208,7 +208,21 @@ input.switch:disabled { opacity: .5; cursor: default; }
   width: 100%; margin-top: 20px; background: var(--accent); color: #fff; font-weight: 600; font-size: 16px;
   min-height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; gap: 10px; transition: opacity .15s;
 }
-.btn-primary:active, .pill-btn:active, .link:active, .next:active, .icon-btn:active { opacity: .6; }
+.btn-primary:active, .pill-btn:active, .icon-btn:active { opacity: .6; }
+/* Antippen: Karten und Kacheln geben leicht nach und federn zurück (wie iOS) */
+.next, .link .ico, .btn-primary, .pill-btn, .stat { transition: transform .35s var(--spring), opacity .15s; }
+.next:active { transform: scale(.975); transition-duration: .12s; }
+.link:active .ico { transform: scale(.9); transition-duration: .12s; }
+.btn-primary:active, .pill-btn:active { transform: scale(.97); transition-duration: .12s; }
+.tabbar button svg { transition: transform .3s var(--spring); }
+.tabbar button:active svg { transform: scale(.86); transition-duration: .1s; }
+/* Segment-Schieber gleitet zur gewählten Option */
+.segmented .seg-thumb { position: absolute; top: 2px; bottom: 2px; left: 2px; border-radius: 7px; background: var(--card);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .12), 0 0 0 .5px rgba(0, 0, 0, .04); transition: transform .38s var(--spring), width .38s var(--spring); pointer-events: none; }
+.segmented.has-thumb button { position: relative; z-index: 1; }
+.segmented.has-thumb button.on { background: transparent; box-shadow: none; }
+:root[data-theme="dark"] .segmented .seg-thumb { background: #636366; }
+@media (prefers-color-scheme: dark) { :root[data-theme="auto"] .segmented .seg-thumb { background: #636366; } }
 .btn-primary:disabled { opacity: .6; }
 .link-btn { margin: 20px auto 0; color: var(--muted); font-size: 13px; display: block; padding: 6px 10px; }
 .spinner { width: 17px; height: 17px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, .4); border-top-color: #fff; animation: spin .8s linear infinite; }
@@ -283,7 +297,8 @@ input.switch:disabled { opacity: .5; cursor: default; }
 .daycol { position: relative; border-left: .5px solid var(--sep); background-image: repeating-linear-gradient(to bottom, var(--sep) 0 .5px, transparent .5px var(--hour)); }
 .daycol.is-today { background-color: var(--accent-soft); background-color: color-mix(in srgb, var(--accent) 4%, transparent); }
 .now-line { position: absolute; left: 0; right: 0; height: 1.5px; background: var(--accent); z-index: 3; }
-.now-line::before { content: ""; position: absolute; left: -4px; top: -3px; width: 7.5px; height: 7.5px; border-radius: 50%; background: var(--accent); }
+.now-line::before { content: ""; position: absolute; left: -4px; top: -3px; width: 7.5px; height: 7.5px; border-radius: 50%; background: var(--accent); animation: now-pulse 2.4s ease-out infinite; }
+@keyframes now-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); } 70%, 100% { box-shadow: 0 0 0 7px transparent; } }
 .block {
   position: absolute; border-radius: 6px; padding: 3px 6px; overflow: hidden; cursor: pointer; z-index: 2;
   background: var(--accent-soft); border-left: 3px solid var(--accent); color: var(--text);
