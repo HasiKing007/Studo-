@@ -9,6 +9,7 @@ const KUSSS = "https://www.kusss.jku.at";
 export const KUSSS_LOGIN = `${KUSSS}/kusss/login.action`;
 export const KUSSS_EXPORT = `${KUSSS}/kusss/ical-multi-form-sz.action`;
 export const KUSSS_GRADES = `${KUSSS}/kusss/gradeinfo.action`;
+export const KUSSS_EXAMS = `${KUSSS}/kusss/szexaminationlist.action`;
 const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
 const MAX_REDIRECTS = 15;
 const MAX_STEPS = 10;
@@ -206,6 +207,71 @@ export function parseGrades(html) {
   return { grades, programs: [...programs] };
 }
 
+// ---------- Prüfungsanmeldung ----------
+
+const DT = /(\d{1,2})\.(\d{1,2})\.(\d{4})(?:[,\s]+(?:um\s+)?(\d{1,2})[:.](\d{2}))?/g;
+const isoDT = (m) => `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}T${(m[4] || "23").padStart(2, "0")}:${m[5] || "59"}`;
+
+/**
+ * Prüfungstermine mit Anmeldefrist aus der KUSSS-Seite "Prüfungen" lesen. Spalten werden über
+ * die Überschriften erkannt; die Frist ist das letzte Datum in der Anmelde-Spalte ("von – bis").
+ * Ergebnis: [{ nr, title, date (Wiener Ortszeit "YYYY-MM-DDTHH:MM"), until, registered }]
+ */
+export function parseExams(html) {
+  const COLS = {
+    nr: /(lva-?nr|nummer|^nr)/i, title: /(titel|lehrveranstaltung|^lva$|prüfung|kurs)/i,
+    date: /(datum|termin|prüfungstag)/i, reg: /(anmeld|frist|registr)/i,
+  };
+  const out = [];
+  for (const t of html.matchAll(/<table\b[\s\S]*?<\/table>/gi)) {
+    const rows = [...t[0].matchAll(/<tr\b[\s\S]*?<\/tr>/gi)].map((r) => ({
+      raw: r[0], cells: [...r[0].matchAll(/<t([hd])\b[^>]*>([\s\S]*?)<\/t\1>/gi)].map((c) => text(c[2])),
+    }));
+    const headIdx = rows.findIndex((r) => r.cells.some((c) => COLS.reg.test(c)) && r.cells.some((c) => COLS.date.test(c) || COLS.title.test(c)));
+    if (headIdx < 0) continue;
+    const head = rows[headIdx].cells, col = {};
+    for (const [key, re] of Object.entries(COLS)) {
+      const i = head.findIndex((c, idx) => re.test(c) && !Object.values(col).includes(idx));
+      if (i >= 0) col[key] = i;
+    }
+    for (const { raw, cells } of rows.slice(headIdx + 1)) {
+      if (cells.length < 3 || col.reg === undefined) continue;
+      const regs = [...String(cells[col.reg] || "").matchAll(DT)];
+      if (!regs.length) continue;
+      const line = cells.join(" ");
+      const nr = line.match(/\b\d{3}\.\w{3}\b/)?.[0] || null;
+      const dateM = [...String(cells[col.date] ?? "").matchAll(DT)][0];
+      const title = String(cells[col.title] ?? "").replace(/\b\d{3}\.\w{3}\b/, "").replace(/^[\s,/|-]+|[\s,/|-]+$/g, "");
+      out.push({
+        nr, title: title || nr || "Prüfung",
+        date: dateM ? isoDT(dateM) : null,
+        until: isoDT(regs.at(-1)),
+        registered: /(abmelden|storn|angemeldet\b(?!\s*:?\s*nein))/i.test(raw) && !/>\s*anmelden\s*</i.test(raw),
+      });
+    }
+  }
+  return out;
+}
+
+/** Aufbau einer Seite für die Diagnose: Überschriften der Tabellen, Zeilenzahl, Muster der ersten Zeile. */
+export function describeTables(page) {
+  const lines = [describePage(page)];
+  for (const t of page.html.matchAll(/<table\b[\s\S]*?<\/table>/gi)) {
+    const rows = [...t[0].matchAll(/<tr\b[\s\S]*?<\/tr>/gi)].map((r) =>
+      [...r[0].matchAll(/<t([hd])\b[^>]*>([\s\S]*?)<\/t\1>/gi)].map((c) => text(c[2])));
+    if (rows.length < 2) continue;
+    // Muster statt Inhalt: Buchstaben -> a, Ziffern bleiben (Daten, LVA-Nummern), max. 40 Zeichen je Zelle
+    const shape = (r) => r.map((c) => c.replace(/\p{L}+/gu, "a").slice(0, 40)).join(" | ");
+    lines.push(`Tabelle ${rows.length} Zeilen; Kopf: ${rows[0].map((c) => c.slice(0, 30)).join(" | ")}`);
+    lines.push(`  Zeile 2: ${shape(rows[1])}`);
+    if (lines.length > 14) break;
+  }
+  const links = [...page.html.matchAll(/<a\b[^>]*href="([^"]+\.action[^"]*)"[^>]*>([\s\S]*?)<\/a>/gi)]
+    .map((m) => `${text(m[2]).slice(0, 30)} → ${m[1].split("?")[0].split("/").pop()}`).filter((x) => !x.startsWith(" "));
+  lines.push(`Menü: ${[...new Set(links)].slice(0, 30).join("; ")}`);
+  return lines.join("\n").slice(0, 6000);
+}
+
 const CAL_LINK = /(?:https?|webcal):\/\/[^\s"'<>]*?(?:published-calendar|ical|calendar)[^\s"'<>]*?token=[^\s"'<>]+/i;
 
 /** Abo-Link aus der Terminexport-Seite (falls schon angelegt). */
@@ -338,6 +404,17 @@ export class JkuSession {
     return r;
   }
 
+  /** Seite "Prüfungen": Anmeldefristen lesen; ohne Treffer eine Diagnose des Seitenaufbaus mitliefern. */
+  async exams() {
+    let page = await this.request(KUSSS_EXAMS);
+    let items = parseExams(page.html);
+    if (!items.length) {
+      const a = page.html.match(/<a\b[^>]*href="([^"]+)"[^>]*>\s*(?:<[^>]+>\s*)*Prüfungen\b/i);
+      if (a) { page = await this.request(new URL(decode(a[1]), page.url).toString(), { referer: page.url }); items = parseExams(page.html); }
+    }
+    return { items, diag: items.length ? null : describeTables(page) };
+  }
+
   /** Persönlichen Abo-Link holen; legt ihn über "Create" an, falls es noch keinen gibt. */
   async calendarLink() {
     let page = await this.request(KUSSS_EXPORT);
@@ -362,7 +439,7 @@ export class JkuSession {
 }
 
 /** Kompletter Ablauf: Login + Abo-Link. Wirft nie, liefert immer ein Ergebnis-Objekt. */
-export async function jkuConnect(username, password, fetchImpl, { calendar = true, grades = true } = {}) {
+export async function jkuConnect(username, password, fetchImpl, { calendar = true, grades = true, exams = true } = {}) {
   const s = new JkuSession(fetchImpl);
   try {
     const r = await s.login(username, password);
@@ -374,6 +451,9 @@ export async function jkuConnect(username, password, fetchImpl, { calendar = tru
     if (grades) {
       try { out.grades = await s.grades(); } catch (e) { out.grades = { grades: [], programs: [], error: e.message }; }
       if (out.grades.error) console.warn("Notenauskunft:", out.grades.error);
+    }
+    if (exams) {
+      try { out.exams = await s.exams(); } catch (e) { out.exams = { items: [], diag: `Fehler: ${e.message}` }; }
     }
     return out;
   } catch (e) {

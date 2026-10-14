@@ -42,3 +42,12 @@ export function demoDeadlines() {
     { uid: "demo-moodle-2@studo.plus", title: "Projektbericht Teil 1", course: "Softwareentwicklung 1", due: at(9, 12), note: null },
   ];
 }
+
+/** Beispiel-Prüfungsanmeldungen wie aus KUSSS (Wiener Ortszeit). */
+export function demoExamRegs() {
+  const day = (n) => new Date(Date.now() + n * 86400_000).toISOString().slice(0, 10);
+  return [
+    { nr: "336.200", title: "Lineare Algebra", date: `${day(7)}T10:15`, until: `${day(1)}T23:59`, registered: false },
+    { nr: "336.100", title: "Analysis 1", date: `${day(30)}T08:30`, until: `${day(20)}T23:59`, registered: true },
+  ];
+}

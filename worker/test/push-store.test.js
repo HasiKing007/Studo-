@@ -81,3 +81,14 @@ test("Sync-Takt: tagsüber 10 Minuten, nachts 60", async () => {
   assert.equal(nextSyncDelay(new Date("2026-10-14T10:00:00Z")), 10 * 60_000);
   assert.equal(nextSyncDelay(new Date("2026-10-14T23:00:00Z")), 60 * 60_000);
 });
+
+test("Erinnerung 48 h vor Ende der Prüfungsanmeldung, nur wenn nicht angemeldet", async () => {
+  const s = store();
+  const now = new Date("2026-10-14T08:00:00Z");
+  s.storeExams({ items: [
+    { nr: "1", title: "Analysis 1", date: "2026-10-30T08:30", until: "2026-10-15T23:59", registered: false },
+    { nr: "2", title: "Statistik", date: "2026-10-30T08:30", until: "2026-10-15T23:59", registered: true },
+  ], diag: null });
+  await s.remind(now);
+  assert.deepEqual(s.sent.map((m) => [m.title, m.body]), [["Anmeldung endet morgen 23:59", "Analysis 1 · Prüfung Fr., 30.10. 08:30"]]);
+});
