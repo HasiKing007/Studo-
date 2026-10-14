@@ -27,6 +27,41 @@ function hints(page) {
 }
 
 /**
+ * JavaScript-Apps (z. B. neue CAMPUSonline-Oberfläche) bauen den Login erst im Browser. Ihre Skripte
+ * verraten aber, wo der Keycloak-Login liegt (Realm, Client-ID). Daraus wird die Login-Adresse gebaut.
+ */
+async function discoverKeycloak(s, page, lines) {
+  const scripts = [...page.html.matchAll(/<script\b[^>]*\bsrc\s*=\s*["']([^"'#]+)/gi)]
+    .map((m) => { try { return new URL(m[1], page.url).href; } catch { return null; } })
+    .filter((u) => u && /(main|custom|config|env)/i.test(u)).slice(0, 4);
+  const found = { realms: new Set(), clients: new Set(), bases: new Set() };
+  for (const u of [...scripts, new URL("assets/config.json", page.url).href, new URL("assets/env.json", page.url).href]) {
+    let txt;
+    try { txt = (await s.request(u)).html.slice(0, 3_000_000); } catch { continue; }
+    // Nur kleine Ausschnitte rund um Schlüsselwörter prüfen: die Skripte sind groß, die CPU-Zeit knapp
+    for (const word of ["realm", "lient_id", "lientId", "sec/auth"]) {
+      for (let i = txt.indexOf(word), n = 0; i >= 0 && n < 40; i = txt.indexOf(word, i + word.length), n++) {
+        const w = txt.slice(Math.max(0, i - 60), i + 80);
+        for (const m of w.matchAll(/realms\/([A-Za-z0-9_.-]{2,40})/g)) found.realms.add(m[1]);
+        for (const m of w.matchAll(/\brealm["']?\s*[:=]\s*["']([A-Za-z0-9_.-]{2,40})["']/g)) found.realms.add(m[1]);
+        for (const m of w.matchAll(/client_?id["']?\s*[:=]\s*["']([A-Za-z0-9_.-]{2,60})["']/gi)) found.clients.add(m[1]);
+        for (const m of w.matchAll(/["']([\w$/.-]*\/sec\/auth[\w$/.-]*)["']/g)) found.bases.add(m[1]);
+      }
+    }
+  }
+  const list = (set) => [...set].slice(0, 6).join(", ") || "–";
+  lines.push(`   Skripte: Realm ${list(found.realms)} · Client ${list(found.clients)} · Auth-Pfade ${list(found.bases)}`);
+  const realm = [...found.realms][0];
+  if (!realm) return null;
+  const origin = new URL(page.url);
+  const base = origin.pathname.match(/^\/[^/]+/)?.[0] || "";
+  const client = [...found.clients][0] || "account-console";
+  const redirect = client === "account-console" ? `${origin.origin}${base}/co/public/sec/auth/realms/${realm}/account/` : page.url;
+  return `${origin.origin}${base}/co/public/sec/auth/realms/${encodeURIComponent(realm)}/protocol/openid-connect/auth?` +
+    new URLSearchParams({ client_id: client, response_type: "code", scope: "openid", redirect_uri: redirect });
+}
+
+/**
  * @param {{start: string[]}} cfg  Einstiegsadressen des Uni-Systems
  * @returns {Promise<{status: string, report: string}>}
  */
@@ -38,7 +73,7 @@ export async function probeLogin(cfg, username, password, fetchImpl) {
     lines.push(`== Start ${start}`);
     let page;
     try { page = await s.request(start); } catch (e) { lines.push(`Fehler: ${e.message}`); continue; }
-    let sent = false;
+    let sent = false, discovered = false;
     for (let step = 0; step < MAX_STEPS; step++) {
       const h = hints(page);
       lines.push(`${step + 1}. ${describePage(page)}${h.length ? ` | Links: ${h.join(", ")}` : ""}`);
@@ -58,6 +93,11 @@ export async function probeLogin(cfg, username, password, fetchImpl) {
       // Weiterleitungs-Formulare ohne Eingaben (z. B. "Weiter", JavaScript-Autosubmit)
       const auto = forms.find((f) => f.fields.every((x) => x.type === "hidden") && f.action);
       if (auto && step < MAX_STEPS - 1) { page = await s.submit(page, auto, {}, auto.buttons[0]); continue; }
+      if (!sent && !discovered && !forms.length && /<script\b[^>]*\bsrc=/i.test(page.html)) {
+        discovered = true;
+        const next = await discoverKeycloak(s, page, lines).catch(() => null);
+        if (next) { page = await s.request(next); continue; }
+      }
       status = sent ? (/(logout|abmelden)/i.test(page.html) ? "angemeldet" : "nach Login unklar") : "kein Login-Formular gefunden";
       break;
     }

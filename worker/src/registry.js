@@ -1,5 +1,5 @@
 // Zentrale Übersicht über alle Konten (für das Admin-Dashboard) und das globale
-// Login-Rate-Limit. Hier liegen nur Nutzungszahlen, keine Termine und keine Links.
+// Login-Rate-Limit. Hier liegen nur Nutzungszahlen und der Anzeigename, keine Termine und keine Links.
 
 import { DurableObject } from "cloudflare:workers";
 import { generateVapid } from "./webpush.js";
@@ -34,7 +34,10 @@ export class Registry extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
-    ctx.blockConcurrencyWhile(async () => this.sql.exec(SCHEMA));
+    ctx.blockConcurrencyWhile(async () => {
+      this.sql.exec(SCHEMA);
+      try { this.sql.exec("ALTER TABLE users ADD COLUMN name TEXT"); } catch { /* Spalte gibt es schon */ }
+    });
   }
 
   // ---------- Rate-Limit (pro IP, über alle Konten) ----------
@@ -67,6 +70,7 @@ export class Registry extends DurableObject {
       key, info.uni || uni, info.username || username, now);
     const [count, last] = EVENTS[event] || [];
     if (count) this.sql.exec(`UPDATE users SET ${count}=${count}+1${last ? `, ${last}=?` : ""} WHERE key=?`, ...(last ? [now] : []), key);
+    if (info.name !== undefined) this.sql.exec("UPDATE users SET name=? WHERE key=?", info.name || null, key);
     for (const col of ["verified", "connected", "events"]) {
       if (info[col] !== undefined) this.sql.exec(`UPDATE users SET ${col}=? WHERE key=?`, Number(info[col]) || 0, key);
     }
@@ -105,7 +109,7 @@ export class Registry extends DurableObject {
       by_uni: byUni,
       days,
       users: users.map((u) => ({
-        uni: u.uni, username: u.username, created_at: u.created_at, verified: !!u.verified, connected: !!u.connected,
+        uni: u.uni, username: u.username, name: u.name || null, created_at: u.created_at, verified: !!u.verified, connected: !!u.connected,
         events: u.events, logins: u.logins, last_login: u.last_login, opens: u.opens, last_open: u.last_open,
         syncs: u.syncs, sync_errors: u.sync_errors, last_sync: u.last_sync, feed_hits: u.feed_hits, last_feed: u.last_feed,
       })),

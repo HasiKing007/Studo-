@@ -1,6 +1,6 @@
 // Service Worker: App-Shell offline verfügbar, API immer frisch (Netzwerk zuerst,
 // bei Offline die letzte Antwort aus dem Cache -> Stundenplan auch im Funkloch lesbar).
-const VERSION = "studo-v24";
+const VERSION = "studo-v25";
 const SHELL = ["/", "/index.html", "/styles.css", "/app.js", "/manifest.json",
                "/icons/icon-192.png", "/icons/icon-512.png", "/apple-touch-icon.png"];
 
@@ -29,7 +29,8 @@ self.addEventListener("fetch", (e) => {
           if (res.ok) caches.open(VERSION).then((c) => c.put(e.request, res.clone()));
           return res;
         })
-        .catch(() => caches.match(e.request))
+        .catch(async () => (await caches.match(e.request)) ||
+          new Response(JSON.stringify({ detail: "Keine Verbindung zum Server." }), { status: 503, headers: { "Content-Type": "application/json" } }))
     );
     return;
   }

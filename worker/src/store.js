@@ -153,6 +153,7 @@ export class StudoStore extends DurableObject {
     this.ctx.waitUntil(stub.track(this.key, event, {
       verified: this.getSetting("verified") === "1",
       connected: !!this.getSetting("ical_url") || this.env.DEMO === "1",
+      name: this.getSetting("display_name") || this.getSetting("kusss_name") || null,
       ...info,
     }).catch((e) => console.warn("Registry:", e.message)));
   }
@@ -178,12 +179,14 @@ export class StudoStore extends DurableObject {
       try {
         const res = await fetch(url.trim().replace(/^webcal:\/\//i, "https://"), {
           headers: { "User-Agent": "StudoPlus/1.0" }, redirect: "follow",
+          signal: AbortSignal.timeout(25_000), // hängende Uni-Server nicht ewig warten lassen
         });
-        if (!res.ok) throw new Error(`Der Uni-Server antwortet mit HTTP ${res.status}`);
+        if (!res.ok) throw new Error(`Der Uni-Server antwortet mit HTTP ${res.status}. Neue Kalender-Links funktionieren manchmal erst nach einigen Stunden.`)
         const text = await res.text();
         if (!text.slice(0, 2000).includes("BEGIN:VCALENDAR")) throw new Error("Antwort ist kein iCal. Ist der Link noch gültig?");
         events = parseICS(text);
       } catch (e) {
+        if (e.name === "TimeoutError") e = new Error("Der Uni-Server antwortet nicht. Studo+ versucht es später automatisch wieder.");
         this.setSetting("last_sync_error", e.message);
         this.track("sync_error");
         throw e;
@@ -211,6 +214,7 @@ export class StudoStore extends DurableObject {
       try {
         const res = await fetch(url.trim().replace(/^webcal:\/\//i, "https://"), {
           headers: { "User-Agent": "StudoPlus/1.0" }, redirect: "follow",
+          signal: AbortSignal.timeout(25_000), // hängende Uni-Server nicht ewig warten lassen
         });
         if (!res.ok) throw new Error(`Moodle antwortet mit HTTP ${res.status}`);
         const text = await res.text();
@@ -830,7 +834,7 @@ export class StudoStore extends DurableObject {
       return json({ ok: true });
     }
 
-    if (path === "/api/events" && method === "GET") {
+    if ((path === "/api/events" || path === "/api/schedule") && method === "GET") { // "schedule": Werbeblocker sperren oft ".../events?"
       const start = url.searchParams.get("start"), end = url.searchParams.get("end");
       if (!start || !end) return error(422, "start und end angeben.");
       const rows = this.sql.exec(`${EFFECTIVE} WHERE e."end" > ? AND e.start < ? ORDER BY e.start`,
