@@ -154,6 +154,21 @@ function titleWithKind(kind, title, tag = "span") {
   return n;
 }
 
+// Art eines Termins (Klausur, Vortrag, …): Farbe nach Gruppe
+const TAGS = {
+  klausur: "Klausur", teilklausur: "Teilklausur", nachklausur: "Nachklausur",
+  vortrag: "Vortrag", praesentation: "Präsentation", abgabe: "Abgabe", einsicht: "Einsicht",
+};
+const TAG_SHORT = { teilklausur: "Teilkl.", nachklausur: "Nachkl.", praesentation: "Präs." };
+function tagGroup(tag) { return /klausur/.test(tag) ? "exam" : tag === "einsicht" ? "info" : "task"; }
+function tagPill(tag) { return tag && TAGS[tag] ? el("span", `tag tag-${tagGroup(tag)}`, TAGS[tag]) : null; }
+function evTitle(ev, node = "span") {
+  const n = titleWithKind(ev.kind, ev.title, node);
+  const t = tagPill(ev.tag);
+  if (t) n.prepend(t);
+  return n;
+}
+
 // Kurzname für die Wochenansicht: eigenes Kürzel, sonst aus den Anfangsbuchstaben der wichtigen Wörter
 // ("Marktorientiertes Management: Grundlagen" -> "MMG", "Lineare Algebra" -> "LA", "Statistik" -> "Stati")
 const STOP = new Set(["in", "die", "der", "das", "den", "dem", "des", "und", "für", "von", "zu", "zur", "zum", "mit", "im", "am", "an", "auf", "aus", "bei", "über", "the", "of", "and", "to", "for", "a", "an", "into", "on"]);
@@ -539,7 +554,7 @@ function evRow(ev) {
   const time = el("div", "ev-time", fmtTime.format(s));
   time.append(el("span", "", fmtTime.format(e)));
   const main = el("div", "ev-main");
-  main.append(titleWithKind(ev.kind, ev.title, "div"), el("div", "ev-loc", ev.status === "cancelled" ? "Entfällt" : ev.location || "Ort unbekannt"));
+  main.append(evTitle(ev, "div"), el("div", "ev-loc", ev.status === "cancelled" ? "Entfällt" : ev.location || "Ort unbekannt"));
   main.firstChild.className = "ev-title";
   r.append(time, el("div", "ev-bar"), main);
   if (ev.attendance) { const m = el("span", "must", "!"); m.title = "Anwesenheitspflicht"; r.append(m); } else r.append(el("span"));
@@ -552,7 +567,7 @@ function openEvent(ev) {
   pushPage(ev.title, (body) => {
     const s = new Date(ev.start), e = new Date(ev.end);
     const head = el("div", "page-head");
-    head.append(titleWithKind(ev.kind, ev.title, "h1"),
+    head.append(evTitle(ev, "h1"),
       el("p", "", `${fmtDay.format(s)} · ${fmtTime.format(s)} – ${fmtTime.format(e)}`));
     body.append(head);
     body.append(group(
@@ -588,6 +603,32 @@ function openEvent(ev) {
     segRow.append(seg);
     body.append(header("Anwesenheitspflicht"), group(courseRow, segRow),
       note("Markierte Termine bekommen im Apple Kalender ein „!“ vor dem Namen."));
+
+    // Art des Termins: aus KUSSS erkannt oder von Hand gewählt
+    const tagBox = el("div", "row tag-picker");
+    const tagNote = note("");
+    const showTagNote = () => {
+      tagNote.textContent = ev.tag_auto
+        ? `Aus dem Uni-Kalender erkannt: ${TAGS[ev.tag_auto]}.${ev.tag !== ev.tag_auto ? " Du hast das geändert." : ""}`
+        : "Erscheint im Kalender, auf der Startseite und im Apple Kalender vor dem Namen.";
+    };
+    const choices = [["", "Normal"], ...Object.entries(TAGS)];
+    const btns = choices.map(([k, label]) => {
+      const b = el("button", `chip${(ev.tag || "") === k ? " on" : ""}`, label);
+      b.addEventListener("click", async () => {
+        if ((ev.tag || "") === k) return;
+        try {
+          const r = await put(`/api/events/${encodeURIComponent(ev.uid)}/tag`, { tag: k || (ev.tag_auto ? "none" : null) });
+          Object.assign(ev, { tag: r.tag, tag_auto: r.tag_auto, tag_manual: r.tag_manual });
+          btns.forEach((x, i) => x.classList.toggle("on", choices[i][0] === (ev.tag || "")));
+          const h1 = $(".page-head h1", body); h1.replaceWith(evTitle(ev, "h1"));
+          weekCache.clear(); showTagNote(); haptic();
+        } catch (err) { alert(err.message); }
+      });
+      return b;
+    });
+    tagBox.append(...btns); showTagNote();
+    body.append(header("Art des Termins"), group(tagBox), tagNote);
     body.append(el("div", "group-spaced"), group(navRow("Kurs anzeigen", () => openCourse(ev.course_id))));
   });
 }
@@ -627,6 +668,23 @@ async function renderHome() {
   const todays = events.filter((e) => dayKey(new Date(e.start)) === dayKey(now));
   list.replaceChildren(...todays.map((e) => evRow(e)));
   if (!todays.length) list.append(el("div", "row empty-row", "Heute keine Termine"));
+  renderExams(now).catch(() => {});
+}
+
+// Klausuren, Vorträge, Abgaben der nächsten Monate; nur sichtbar, wenn es welche gibt
+async function renderExams(now) {
+  const evs = (await fetchEvents(now, addDays(midnight(now), 150)))
+    .filter((e) => e.tag && e.status !== "cancelled").slice(0, 6);
+  $("#exams-head").hidden = $("#exam-list").hidden = !evs.length;
+  $("#exam-list").replaceChildren(...evs.map((e) => {
+    const s = new Date(e.start);
+    const n = Math.round((midnight(s) - midnight(now)) / 86400000);
+    const r = el("button", "row row-nav exam-row");
+    const t = el("span", "exam-title"); t.append(tagPill(e.tag), e.title);
+    r.append(t, el("span", "value", n <= 1 ? `${inDays(s)}, ${fmtTime.format(s)}` : `in ${n} Tagen`), chev());
+    r.addEventListener("click", () => openEvent(e));
+    return r;
+  }));
 }
 
 const ICONS = {
@@ -812,15 +870,19 @@ function timeGrid(days, byDay, mode) {
       const dur = Math.max(20, ((p.en - p.s) / 3600000) * HOUR - 2);
       const b = el("button", "block");
       b.classList.toggle("cancelled", p.e.status === "cancelled");
+      if (p.e.tag) b.classList.add(`t-${tagGroup(p.e.tag)}`);
       b.style.top = `${top + 1}px`; b.style.height = `${dur}px`;
       b.style.left = `${(p.lane / n) * 100}%`; b.style.width = `calc(${100 / n}% - 3px)`;
       if (mode === "day") {
-        b.append(titleWithKind(p.e.kind, p.e.title, "b"));
+        b.append(evTitle(p.e, "b"));
         b.append(el("span", "", `${fmtTime.format(p.s)} – ${fmtTime.format(p.en)}${p.e.location ? " · " + p.e.location : ""}`));
       } else {
         // Woche: zu schmal für ganze Titel -> Kürzel, darunter der Raum
         b.title = p.e.title;
-        b.append(titleWithKind(p.e.kind, shortName(p.e), "b"));
+        const t = titleWithKind(p.e.kind, shortName(p.e), "b");
+        // Bei Prüfungen ist die Art wichtiger als VL/UE: statt der LVA-Art anzeigen
+        if (p.e.tag) { t.querySelector(".kind")?.remove(); t.prepend(el("span", "kind", TAG_SHORT[p.e.tag] || TAGS[p.e.tag])); }
+        b.append(t);
         if (p.e.room || p.e.location) b.append(el("span", "room", p.e.status === "cancelled" ? "entfällt" : p.e.room || p.e.location));
       }
       if (p.e.attendance) b.append(el("span", "must", "!"));
@@ -940,6 +1002,7 @@ async function openCourse(id) {
       upcoming.replaceChildren(...evs.map((e) => {
         const s = new Date(e.start);
         const r = row(`${inDays(s)}`, `${fmtTime.format(s)} · ${e.status === "cancelled" ? "Entfällt" : e.location || "Ort unbekannt"}`, "tap nowrap-label");
+        if (e.tag) r.firstChild.append(" ", tagPill(e.tag));
         r.addEventListener("click", () => openEvent(e));
         return r;
       }));
