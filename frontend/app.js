@@ -483,24 +483,29 @@ async function loadUnis() {
 
 // Hintergrundfotos der Anmeldeseite (Bilddateien in frontend/, Namensnennung laut Lizenz)
 const LOGIN_PHOTOS = {
-  jku: { by: "Hertha Hurnaus", license: "CC BY-SA 4.0", licenseUrl: "https://creativecommons.org/licenses/by-sa/4.0/deed.de",
+  jku: { title: "Science Park JKU Linz", by: "Hertha Hurnaus", license: "CC BY-SA 4.0", shareAlike: true, licenseUrl: "https://creativecommons.org/licenses/by-sa/4.0/deed.de",
     source: "https://commons.wikimedia.org/wiki/File:Caramel-architekten-science-park-jku.gif" },
-  abpu: { by: "Simon Bauer, Architekturbüro 1", license: "CC BY 3.0", licenseUrl: "https://creativecommons.org/licenses/by/3.0/deed.de",
+  abpu: { title: "Neubau Anton Bruckner Privatuniversität", by: "Simon Bauer, Architekturbüro 1", license: "CC BY 3.0", licenseUrl: "https://creativecommons.org/licenses/by/3.0/deed.de",
     source: "https://commons.wikimedia.org/wiki/File:Neubau_Anton_Bruckner_Privatuniversit%C3%A4t_4126_CC-BY_%27Architekturb%C3%BCro_1_-_Foto_Simon_Bauer%27.tif" },
-  plus: { by: "Leonhard Lenz", license: "CC0", licenseUrl: "https://creativecommons.org/publicdomain/zero/1.0/deed.de",
+  plus: { title: "Theologische Fakultät Salzburg", by: "Leonhard Lenz", license: "CC0", licenseUrl: "https://creativecommons.org/publicdomain/zero/1.0/deed.de",
     source: "https://commons.wikimedia.org/wiki/File:Paris_Lodron_Universit%C3%A4t_Theologische_Fakult%C3%A4t_Salzburg_2023-09-27_01.jpg" },
 };
+// Namensnennung nach den Lizenzbedingungen: Titel, Urheber, Quelle, Lizenz, Hinweis auf Bearbeitung
+function photoCredit(id) {
+  const p = LOGIN_PHOTOS[id];
+  if (!p) return null;
+  const link = (href, text) => { const a = el("a", "", text); a.href = href; a.target = "_blank"; a.rel = "noopener"; return a; };
+  return [`Foto „${p.title}“: ${p.by}, `, link(p.source, "Wikimedia Commons"), ", ", link(p.licenseUrl, p.license),
+    p.shareAlike ? `, weichgezeichnet; die Bearbeitung steht ebenfalls unter ${p.license}.` : ", weichgezeichnet."];
+}
 function updateLoginHint() {
   const u = state.unis.find((x) => x.id === $("#login-uni").value);
   if (!u) return;
   $("#uni-name").textContent = u.name;
   $("#login").dataset.uni = u.id; // Hintergrundfoto je Hochschule
-  const photo = LOGIN_PHOTOS[u.id], credit = $("#photo-credit");
-  credit.hidden = !photo;
-  if (photo) {
-    const link = (href, text) => { const a = el("a", "", text); a.href = href; a.target = "_blank"; a.rel = "noopener"; return a; };
-    credit.replaceChildren(`Foto: ${photo.by}, `, link(photo.source, "Wikimedia Commons"), ", ", link(photo.licenseUrl, photo.license), ", unscharf bearbeitet");
-  }
+  const credit = $("#photo-credit"), parts = photoCredit(u.id);
+  credit.hidden = !parts;
+  if (parts) credit.replaceChildren(...parts);
   const user = $("#login-user");
   user.placeholder = u.userLabel; user.setAttribute("aria-label", u.userLabel);
   $("#login-hint").textContent = u.auto
@@ -1674,6 +1679,9 @@ function renderSettings() {
   const me = state.me;
   setAvatar($("#set-avatar"));
   $("#set-name").textContent = displayName(me) + (me.demo ? " (Demo)" : "");
+  const credit = photoCredit(me.uni.id); // Foto oben auf Home: Namensnennung auch in der App
+  $("#set-photo-credit").hidden = !credit;
+  if (credit) $("#set-photo-credit").replaceChildren(...credit);
   $("#set-sub").textContent = [me.name ? me.matrikel : null, me.uni.name].filter(Boolean).join(" · ");
   $("#set-status").textContent = me.connected ? (me.ical_source === "auto" ? "Automatisch" : "Verbunden") : "Nicht verbunden";
   $("#set-sync").textContent = me.last_sync ? ago(me.last_sync) : "noch nie";
