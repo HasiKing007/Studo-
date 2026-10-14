@@ -28,5 +28,14 @@ export function demoEvents() {
       });
     }
   }
+  // Eine Teilklausur und eine Präsentation, damit die Prüfungsanzeige etwas zeigt
+  const exam = (days, h, nr, title, desc) => {
+    const d = new Date(monday.getTime() + days * 86400_000);
+    const [y, mo, day] = [d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()];
+    out.push({ uid: `demo-exam-${days}@studo.plus`, courseId: nr, title, kind: "VL",
+      start: viennaToUtc(y, mo, day, h, 0), end: viennaToUtc(y, mo, day, h + 1, 30), location: "HS 1", description: desc, cancelled: false });
+  };
+  exam(10, 16, "336.100", "Analysis 1", "1. Teilklausur");
+  exam(17, 14, "351.001", "Softwareentwicklung 1", "Präsentation der Projekte");
   return out;
 }

@@ -8,6 +8,7 @@ import { formatRoom, parseRoom } from "./rooms.js";
 import { demoEvents } from "./demo.js";
 import { jkuConnect, parseGrade } from "./jku.js";
 import { probeLogin } from "./probe.js";
+import { TAGS, detectTag } from "./tags.js";
 import { UNIS, matrikel } from "./unis.js";
 import { error, hashPassword, json, parseSession, randomToken, sha256, timingSafeEqual, verifyPassword } from "./util.js";
 
@@ -33,6 +34,8 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_start ON events(start);
 CREATE TABLE IF NOT EXISTS course_settings (course_id TEXT PRIMARY KEY, attendance INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS event_overrides (uid TEXT PRIMARY KEY, attendance INTEGER NOT NULL);
+-- Art des Termins von Hand gesetzt ("none" = erkannte Art ausblenden)
+CREATE TABLE IF NOT EXISTS event_tags (uid TEXT PRIMARY KEY, tag TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
 -- Kursübersicht bleibt erhalten, auch wenn alte Termine aufgeräumt werden (Semesterfilter)
 CREATE TABLE IF NOT EXISTS courses (
@@ -51,10 +54,18 @@ CREATE TABLE IF NOT EXISTS grades (
 
 const EFFECTIVE = `
 SELECT e.*, COALESCE(o.attendance, cs.attendance, 0) AS attendance, cs.short AS short,
-       o.attendance IS NOT NULL AS is_override, COALESCE(cs.attendance, 0) AS course_attendance
+       o.attendance IS NOT NULL AS is_override, COALESCE(cs.attendance, 0) AS course_attendance, t.tag AS tag_set
 FROM events e
 LEFT JOIN event_overrides o ON o.uid = e.uid
+LEFT JOIN event_tags t ON t.uid = e.uid
 LEFT JOIN course_settings cs ON cs.course_id = e.course_id`;
+
+/** Art eines Termins: von Hand gesetzt, sonst aus Titel und Beschreibung erkannt. */
+function eventTag(r) {
+  const auto = detectTag(r.title, r.description);
+  const tag = r.tag_set === "none" ? null : r.tag_set || auto;
+  return { tag, tag_auto: auto, tag_manual: r.tag_set != null };
+}
 
 const viennaMonthYear = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Vienna", year: "numeric", month: "2-digit" });
 
@@ -191,6 +202,7 @@ export class StudoStore extends DurableObject {
     this.updateCourses(events);
     // Aufräumen: Termine, die älter als ein Semester sind
     this.sql.exec(`DELETE FROM events WHERE "end" < ?`, new Date(now - 180 * 86400_000).toISOString());
+    this.sql.exec("DELETE FROM event_tags WHERE uid NOT IN (SELECT uid FROM events)");
 
     this.setSetting("last_sync", stamp);
     this.setSetting("last_sync_error", null);
@@ -371,10 +383,14 @@ export class StudoStore extends DurableObject {
     return buildCalendar(`${this.uni.name} · Studo+`, rows.map((r) => {
       const mandatory = !!r.attendance;
       const cancelled = r.status === "cancelled";
+      const { tag } = eventTag(r);
       let summary = (r.kind ? `${r.kind} ` : "") + r.title; // LVA-Art immer zuerst
+      if (tag && !r.title.toLowerCase().includes(TAGS[tag].toLowerCase())) summary = `${TAGS[tag]}: ${summary}`;
       if (mandatory) summary = marker + summary;
       if (cancelled) summary = "Entfällt: " + summary;
       const notes = [];
+      if (tag) notes.push(TAGS[tag]);
+      const cats = [tag && TAGS[tag], mandatory && "Anwesenheitspflicht"].filter(Boolean);
       if (mandatory) notes.push("Anwesenheitspflicht");
       if (r.room_raw && r.room_raw !== r.room) notes.push(`Ort laut Uni: ${r.room_raw}`);
       if (r.description) notes.push(r.description);
@@ -383,8 +399,8 @@ export class StudoStore extends DurableObject {
         sequence: r.sequence, status: cancelled ? "CANCELLED" : "CONFIRMED",
         location: formatRoom(r.building, r.room) || null,
         description: notes.length ? notes.join("\n") : null,
-        categories: mandatory ? ["Anwesenheitspflicht"] : null,
-        priority: mandatory ? 1 : null,
+        categories: cats.length ? cats : null,
+        priority: mandatory || tag ? 1 : null,
       };
     }));
   }
@@ -537,6 +553,7 @@ export class StudoStore extends DurableObject {
         status: r.status, building: r.building, room: r.room, room_raw: r.room_raw,
         location: formatRoom(r.building, r.room), attendance: !!r.attendance,
         is_override: !!r.is_override, course_attendance: !!r.course_attendance, short: r.short || null,
+        ...eventTag(r),
       })));
     }
 
@@ -658,6 +675,21 @@ export class StudoStore extends DurableObject {
       else this.sql.exec("INSERT INTO event_overrides(uid, attendance) VALUES(?,?) ON CONFLICT(uid) DO UPDATE SET attendance=excluded.attendance", uid, attendance ? 1 : 0);
       this.touch("uid=?", uid);
       return json({ ok: true });
+    }
+
+    const tagM = path.match(/^\/api\/events\/(.+)\/tag$/);
+    if (tagM && method === "PUT") {
+      const uid = decodeURIComponent(tagM[1]);
+      const row = this.sql.exec("SELECT title, description FROM events WHERE uid=?", uid).toArray()[0];
+      if (!row) return error(404, "Termin nicht gefunden");
+      const { tag } = await request.json().catch(() => ({}));
+      if (tag != null && tag !== "none" && !TAGS[tag]) return error(422, "Unbekannte Art.");
+      // Gleich wie erkannt -> nichts speichern, damit spätere Änderungen in KUSSS durchkommen
+      if (tag == null || tag === detectTag(row.title, row.description)) this.sql.exec("DELETE FROM event_tags WHERE uid=?", uid);
+      else this.sql.exec("INSERT INTO event_tags(uid, tag) VALUES(?,?) ON CONFLICT(uid) DO UPDATE SET tag=excluded.tag", uid, tag);
+      this.touch("uid=?", uid);
+      const r = this.sql.exec(`${EFFECTIVE} WHERE e.uid=?`, uid).toArray()[0];
+      return json({ ok: true, ...eventTag(r) });
     }
 
     return error(404, "Unbekannter Endpunkt");
