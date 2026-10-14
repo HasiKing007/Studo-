@@ -1,6 +1,6 @@
 // Service Worker: App-Shell offline verfügbar, API immer frisch (Netzwerk zuerst,
 // bei Offline die letzte Antwort aus dem Cache -> Stundenplan auch im Funkloch lesbar).
-const VERSION = "studo-v20";
+const VERSION = "studo-v21";
 const SHELL = ["/", "/index.html", "/styles.css", "/app.js", "/manifest.json",
                "/icons/icon-192.png", "/icons/icon-512.png", "/apple-touch-icon.png"];
 
@@ -44,4 +44,23 @@ self.addEventListener("fetch", (e) => {
       return cached || network;
     })
   );
+});
+
+// Push-Mitteilungen: Raumänderungen, Ausfälle, Erinnerungen an Abgaben und Prüfungen
+self.addEventListener("push", (e) => {
+  let m = {};
+  try { m = e.data ? e.data.json() : {}; } catch { m = { body: e.data?.text() }; }
+  e.waitUntil(self.registration.showNotification(m.title || "Studo+", {
+    body: m.body || "", tag: m.tag || undefined, icon: "/icons/icon-192.png", badge: "/icons/icon-192.png",
+    data: { url: m.url || "/" },
+  }));
+});
+
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  const url = new URL(e.notification.data?.url || "/", self.location.origin).href;
+  e.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+    const open = list.find((c) => c.url.startsWith(self.location.origin));
+    return open ? open.focus() : self.clients.openWindow(url);
+  }));
 });
