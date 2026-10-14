@@ -1,5 +1,5 @@
-// Art eines Termins (Klausur, Vortrag, …). Wird aus Titel und Beschreibung des Uni-Kalenders
-// erkannt und lässt sich pro Termin von Hand setzen oder entfernen.
+// Art eines Termins (Klausur, Vortrag, …). Wird nur aus dem Titel des Uni-Kalenders erkannt
+// (Beschreibungen erwähnen Prüfungen oft nur nebenbei) und lässt sich pro Termin von Hand setzen oder entfernen.
 
 export const TAGS = {
   klausur: "Klausur",
@@ -23,11 +23,8 @@ const RULES = [
 ];
 
 /** Erkannte Art eines Termins oder null. */
-export function detectTag(title, description = "") {
-  for (const text of [title, description]) {
-    const t = String(text || "").toLowerCase();
-    if (!t) continue;
-    for (const [tag, re] of RULES) if (re.test(t)) return tag;
-  }
+export function detectTag(title) {
+  const t = String(title || "").toLowerCase();
+  for (const [tag, re] of RULES) if (re.test(t)) return tag;
   return null;
 }

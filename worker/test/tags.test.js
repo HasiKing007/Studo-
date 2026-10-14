@@ -19,6 +19,6 @@ test("normale Termine bleiben ohne Art", () => {
   assert.equal(detectTag("Lineare Algebra", ""), null);
 });
 
-test("Beschreibung zählt, wenn der Titel nichts verrät", () => {
-  assert.equal(detectTag("Analysis 1", "Schriftliche Prüfung, Hörsaal 1"), "klausur");
+test("nur der Titel zählt, nicht die Beschreibung", () => {
+  assert.equal(detectTag("Analysis 1", "Schriftliche Prüfung am Semesterende"), null);
 });
