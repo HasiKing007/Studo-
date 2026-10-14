@@ -17,12 +17,9 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <!-- Start-Animation: Logo erscheint, danach gleitet der Vorhang nach oben weg -->
+  <!-- Start-Animation: Schriftzug wie auf dem App-Icon, danach weicher Übergang in die App -->
   <div class="splash" id="splash" aria-hidden="true">
-    <div class="splash-inner">
-      <img class="splash-mark" src="/icons/icon-512.png" alt="" width="96" height="96">
-      <div class="splash-word">Studo<span class="plus">+</span></div>
-    </div>
+    <div class="splash-inner"><span class="splash-word">Studo</span><span class="splash-plus">+</span></div>
   </div>
 
   <!-- Login -->
@@ -104,6 +101,8 @@
         <div id="today-list" class="group"></div>
         <h2 class="section-header" id="exams-head" hidden>Prüfungen &amp; Abgaben</h2>
         <div id="exam-list" class="group" hidden></div>
+        <h2 class="section-header" id="campus-head" hidden>USI</h2>
+        <div id="campus-card" hidden></div>
         <h2 class="section-header" id="mensa-head" hidden>Mensa</h2>
         <div id="mensa-card" hidden></div>
         <h2 class="section-header" id="links-head">Schnellzugriff</h2>
@@ -190,6 +189,7 @@
             <div class="segmented seg-sm" id="theme-seg"><button data-theme="light">Hell</button><button data-theme="auto">Auto</button><button data-theme="dark">Dunkel</button></div>
           </div>
           <label class="row" id="mensa-row" hidden><span>Mensa am Home-Screen</span></label>
+          <label class="row" id="campus-row" hidden><span>USI am Home-Screen</span></label>
         </div>
 
         <div class="group group-spaced">

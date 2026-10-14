@@ -23,7 +23,7 @@ const fmtAvg = new Intl.NumberFormat("de-AT", { minimumFractionDigits: 2, maximu
 // Service Worker: lädt neue Versionen im Hintergrund. Ob eine neuere Version online ist, prüft die
 // App selbst (Versionsnummer in sw.js), denn iOS meldet einen Wechsel des Service Workers nicht
 // zuverlässig. Dann erscheint oben ein Banner wie eine iOS-Mitteilung mit Knopf zum Neustarten.
-const BUILD = "studo-v22"; // muss zu VERSION in sw.js passen (Test prüft das)
+const BUILD = "studo-v23"; // muss zu VERSION in sw.js passen (Test prüft das)
 let swReg = null;
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").then((reg) => { swReg = reg; }).catch(() => {});
@@ -82,7 +82,14 @@ const darkQuery = matchMedia("(prefers-color-scheme: dark)");
 function applyTheme(theme = getTheme()) {
   document.documentElement.dataset.theme = theme;
   const dark = theme === "dark" || (theme === "auto" && darkQuery.matches);
-  $("#theme-color").content = dark ? "#000000" : "#F2F2F7";
+  // iOS übernimmt eine geänderte Farbe der Statusleiste oft erst verzögert: Meta-Tag neu einsetzen
+  const color = dark ? "#000000" : "#F2F2F7", old = $("#theme-color");
+  if (old.content !== color) {
+    const meta = document.createElement("meta");
+    meta.name = "theme-color"; meta.id = "theme-color"; meta.content = color;
+    old.replaceWith(meta);
+  }
+  document.documentElement.style.colorScheme = dark ? "dark" : "light";
   $$("#theme-seg button").forEach((b) => b.classList.toggle("on", b.dataset.theme === theme));
 }
 applyTheme();
@@ -99,14 +106,14 @@ function endSplash() {
   const splash = $("#splash");
   if (!splash || html.classList.contains("splash-done")) return;
   const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const hold = Math.max(0, (reduced ? 100 : 900) - (Date.now() - splashStarted));
+  const hold = Math.max(0, (reduced ? 100 : 1500) - (Date.now() - splashStarted));
   let done = false;
   const finish = () => { if (done) return; done = true; splash.remove(); html.classList.add("splash-done"); };
   setTimeout(() => {
     splash.classList.add("is-leaving");
     html.classList.remove("splashing");
     splash.addEventListener("animationend", (e) => { if (e.target === splash) finish(); });
-    setTimeout(finish, 900);
+    setTimeout(finish, 1000);
   }, hold);
 }
 
@@ -148,17 +155,16 @@ function inDays(d) {
 
 // Haptik: Android über vibrate(). iOS hat dafür keine Schnittstelle, aber ein Schalter (<input switch>,
 // Safari 18) gibt beim Umschalten ein Taptic-Feedback, auch wenn er über ein verstecktes Label ausgelöst wird.
-let hapticLabel = null;
 function haptic() {
   if (navigator.vibrate) { navigator.vibrate(8); return; }
+  // Jedes Mal ein frischer, unsichtbarer Schalter: ein wiederverwendeter gibt auf iOS nicht zuverlässig Feedback
   try {
-    if (!hapticLabel) {
-      hapticLabel = document.createElement("label");
-      hapticLabel.className = "haptic-proxy"; hapticLabel.setAttribute("aria-hidden", "true");
-      const sw = document.createElement("input"); sw.type = "checkbox"; sw.setAttribute("switch", ""); sw.tabIndex = -1;
-      hapticLabel.append(sw); document.body.append(hapticLabel);
-    }
-    hapticLabel.click();
+    const label = document.createElement("label");
+    label.ariaHidden = "true"; label.style.display = "none";
+    const sw = document.createElement("input"); sw.type = "checkbox"; sw.setAttribute("switch", "");
+    label.append(sw); document.head.append(label);
+    label.click();
+    label.remove();
   } catch { /* ohne Haptik */ }
 }
 
@@ -602,12 +608,22 @@ function switchTab(name) {
   document.body.classList.toggle("locked", name === "calendar" || stack.length > 0);
   window.scrollTo({ top: 0 });
   $("#appbar").classList.remove("scrolled");
-  renderTab(name, true);
+  // Alter Inhalt bleibt unsichtbar, bis neu gerendert ist (höchstens 180 ms), dann gleitet alles einmal herein
+  const tab = $(`#tab-${name}`), intro = !REDUCED && name !== "calendar";
+  let shown = false;
+  const show = () => {
+    if (shown) return; shown = true;
+    tab.classList.remove("entering");
+    if (intro && state.tab === name) enterTab(name);
+  };
+  if (intro) tab.classList.add("entering");
+  renderTab(name).finally(show);
+  setTimeout(show, 180);
   requestAnimationFrame(() => $$(`#tab-${name} .segmented`).forEach(syncSegment)); // war versteckt -> Maße erst jetzt bekannt
 }
-function renderTab(name, intro = false) {
+function renderTab(name) {
   const run = { home: renderHome, calendar: renderCalendar, courses: renderCourses, study: renderStudy, settings: renderSettings }[name];
-  if (run) Promise.resolve(run()).then(() => { if (intro && state.tab === name) enterTab(name); }).catch((err) => console.error(err));
+  return run ? Promise.resolve(run()).catch((err) => console.error(err)) : Promise.resolve();
 }
 // Waagrechtes Ziehen mit Richtungserkennung: senkrechtes Scrollen bleibt unberührt
 function hDrag(target, { canStart = () => true, onMove, onEnd }) {
@@ -770,6 +786,7 @@ async function renderHome() {
   list.replaceChildren(...todays.map((e) => evRow(e)));
   if (!todays.length) list.append(el("div", "row empty-row", "Heute keine Termine"));
   renderExams(now).catch(() => {});
+  renderCampus().catch(() => { $("#campus-head").hidden = $("#campus-card").hidden = true; });
   renderMensa(now).catch(() => { $("#mensa-head").hidden = $("#mensa-card").hidden = true; });
 }
 
@@ -788,24 +805,52 @@ function dueText(s, now = new Date()) {
   const n = Math.round((midnight(s) - midnight(now)) / 86400000);
   return n <= 1 ? `${inDays(s)}, ${fmtTime.format(s)}` : `in ${n} Tagen`;
 }
-async function renderExams(now) {
+// Alles Anstehende: Prüfungen/Vorträge, Moodle-Abgaben, offene Prüfungsanmeldungen
+async function upcomingItems(now) {
   const [evs, dls, regs] = await Promise.all([
     fetchEvents(now, addDays(midnight(now), 150)).then((l) => l.filter((e) => e.tag && e.status !== "cancelled")),
     loadDeadlines().catch(() => []),
     loadRegs().catch(() => ({ items: [] })),
   ]);
-  const items = [
+  return [
     ...evs.map((e) => ({ at: new Date(e.start), title: tagName(e), open: () => openEvent(e) })),
     ...dls.filter((d) => !d.done && new Date(d.due) > now).map((d) => ({ at: new Date(d.due), title: `Abgabe: ${d.title}`, open: () => openDeadline(d) })),
     ...regs.items.filter((x) => !x.registered).map((x) => ({ at: new Date(x.until), title: `Anmeldung: ${x.title}`, open: () => openReg(x) })),
-  ].sort((a, b) => a.at - b.at).slice(0, 8);
+  ].sort((a, b) => a.at - b.at);
+}
+function upcomingRow(it, now) {
+  const r = el("button", "row row-nav exam-row");
+  r.append(el("span", "exam-title", it.title), el("span", "value", dueText(it.at, now)), chev());
+  r.addEventListener("click", it.open);
+  return r;
+}
+// Home zeigt nur die nächsten 14 Tage (höchstens 3), der Rest liegt eine Ebene tiefer
+const SOON_DAYS = 14;
+async function renderExams(now) {
+  const items = await upcomingItems(now);
+  const soon = items.filter((it) => it.at - now < SOON_DAYS * 86400000).slice(0, 3);
+  const rows = soon.map((it) => upcomingRow(it, now));
+  if (items.length > soon.length) {
+    const rest = items.length - soon.length;
+    rows.push(navRow(soon.length ? `${rest} weitere` : `${items.length} anstehend`, () => openUpcoming(), soon.length ? "" : `nächste ${dueText(items[0].at, now)}`));
+  }
   $("#exams-head").hidden = $("#exam-list").hidden = !items.length;
-  $("#exam-list").replaceChildren(...items.map((it) => {
-    const r = el("button", "row row-nav exam-row");
-    r.append(el("span", "exam-title", it.title), el("span", "value", dueText(it.at, now)), chev());
-    r.addEventListener("click", it.open);
-    return r;
-  }));
+  $("#exam-list").replaceChildren(...rows);
+}
+function openUpcoming() {
+  pushPage("Prüfungen & Abgaben", async (body) => {
+    const head = el("div", "page-head");
+    head.append(el("h1", "", "Prüfungen & Abgaben"), el("p", "", "Alles Anstehende der nächsten Monate."));
+    body.append(head);
+    const now = new Date();
+    const fmtMon = new Intl.DateTimeFormat("de-AT", { month: "long", year: "numeric" });
+    let month = null, box = null;
+    for (const it of await upcomingItems(now)) {
+      const m = fmtMon.format(it.at);
+      if (m !== month) { month = m; box = group(); body.append(header(m), box); }
+      box.append(upcomingRow(it, now));
+    }
+  });
 }
 
 // Eine Moodle-Abgabe: Fälligkeit, Kurs, abhaken
@@ -851,6 +896,62 @@ function openReg(x) {
       body.append(el("div", "group-spaced"), group(a));
     }
     body.append(note("Die Fristen kommen aus KUSSS und werden bei jedem Holen von Kalender und Noten aktualisiert. Nach der Anmeldung verschwindet der Eintrag beim nächsten Mal."));
+  });
+}
+
+// Campus (JKU: USI): Fitnessstudio und Sauna mit Live-Status, Hinweise; Details eine Ebene tiefer
+const CAMPUS_HIDE = "studo_campus_off";
+const campusHidden = () => { try { return localStorage.getItem(CAMPUS_HIDE) === "1"; } catch { return false; } };
+const fmtShortDay = new Intl.DateTimeFormat("de-AT", { weekday: "short", day: "numeric", month: "numeric" });
+async function loadCampus() {
+  if (!state.campus || Date.now() - state.campus.at > 5 * 60_000) state.campus = { at: Date.now(), ...(await api("/api/campus")) };
+  return state.campus;
+}
+function statusRow(label, st, onClick) {
+  const r = el(onClick ? "button" : "div", `row${onClick ? " row-nav" : ""} status-row`);
+  const v = el("span", "value");
+  v.append(el("i", `dot${st.open ? " on" : ""}`), document.createTextNode(st.text));
+  r.append(el("span", "", label), v);
+  if (onClick) { r.append(chev()); r.addEventListener("click", onClick); }
+  return r;
+}
+async function renderCampus() {
+  const head = $("#campus-head"), box = $("#campus-card");
+  if (state.me.campus !== "usi" || campusHidden()) { head.hidden = box.hidden = true; return; }
+  const { usi } = await loadCampus();
+  if (!usi) { head.hidden = box.hidden = true; return; }
+  const soon = usi.notices.filter((n) => (new Date(n.date) - midnight(new Date())) / 86400000 < 7);
+  const rows = [statusRow("Fitnessstudio", usi.gym, openUsi), statusRow("Sauna", usi.sauna, openUsi)];
+  for (const n of soon) rows.push(el("div", "row notice-row", n.text));
+  box.replaceChildren(group(...rows));
+  head.hidden = box.hidden = false;
+}
+function openUsi() {
+  pushPage("USI", async (body) => {
+    const head = el("div", "page-head");
+    head.append(el("h1", "", "USI"), el("p", "", "Universitätssportinstitut der JKU"));
+    body.append(head);
+    let usi;
+    try { ({ usi } = await loadCampus()); } catch (err) { errorBox(body, err, "USI-Infos"); return; }
+    body.append(group(statusRow("Fitnessstudio", usi.gym), statusRow("Sauna", usi.sauna)));
+    if (usi.notices.length) body.append(header("Hinweise"), group(...usi.notices.map((n) => el("div", "row notice-row", n.text))));
+    body.append(header("Öffnungszeiten"), group(...usi.hours.map(([k, v]) => row(k, v))));
+    body.append(header("Sauna"), group(...usi.sauna_plan.map(([k, v]) => row(k, v))), note(usi.sauna_note));
+    if (usi.news.length) {
+      body.append(header("News"), group(...usi.news.map((n) => {
+        const a = el("a", "row row-nav news-row"); a.href = n.url; a.target = "_blank"; a.rel = "noopener";
+        const t = el("div", "meal-text");
+        if (n.date) t.append(el("span", "meal-cat pref-hint", fmtShortDay.format(new Date(`${n.date}T12:00:00`))));
+        t.append(el("span", "meal-name", n.title));
+        a.append(t, chev());
+        return a;
+      })));
+    }
+    body.append(header("Links"), group(...usi.links.map((l) => {
+      const a = el("a", "row row-nav"); a.href = l.url; a.target = "_blank"; a.rel = "noopener";
+      a.append(el("span", "", l.name), chev());
+      return a;
+    })), note("Eine Live-Auslastung veröffentlicht das USI leider nicht. Sobald es eine gibt, kommt sie hierher."));
   });
 }
 
@@ -1475,6 +1576,10 @@ function renderSettings() {
   $("#sync-error").textContent = me.last_sync_error || "";
   $("#set-moodle").textContent = me.moodle?.error ? "Fehler" : me.moodle?.connected ? "Verbunden" : "";
   $("#mensa-row").hidden = !me.mensa;
+  $("#campus-row").hidden = me.campus !== "usi";
+  if (me.campus === "usi" && !$("#campus-row .switch")) {
+    $("#campus-row").append(makeSwitch(!campusHidden(), (v) => { try { localStorage.setItem(CAMPUS_HIDE, v ? "0" : "1"); } catch {} }));
+  }
   if (me.mensa && !$("#mensa-row .switch")) {
     $("#mensa-row").append(makeSwitch(!mensaHidden(), (v) => { try { localStorage.setItem(MENSA_HIDE, v ? "0" : "1"); } catch {} }));
   }

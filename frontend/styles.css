@@ -16,6 +16,7 @@
   --sep: #E0E0E5;
   --card-border: #E5E5EA;
   --bar-bg: rgba(249, 249, 249, .8);
+  --top-bar: rgba(242, 242, 247, .86); /* gleiche Farbe wie die Statusleiste darüber: keine Kante */
   --shadow: 0 1px 2px rgba(0, 0, 0, .04);
   --radius: 12px;
   --ios: cubic-bezier(.32, .72, 0, 1);
@@ -37,6 +38,7 @@
   --sep: #38383A;
   --card-border: transparent;
   --bar-bg: rgba(22, 22, 24, .8);
+  --top-bar: rgba(0, 0, 0, .82);
   --shadow: none;
   color-scheme: dark;
 }
@@ -44,7 +46,7 @@
   :root[data-theme="auto"] {
     --accent: #F0701A; --accent-soft: rgba(240, 112, 26, .18); --green: #30D158; --red: #FF453A;
     --switch-off: rgba(120, 120, 128, .32); --bg: #000000; --card: #1C1C1E; --fill: #39393D; --fill-2: #2C2C2E; --text: #F2F2F7; --muted: #8D8D93;
-    --placeholder: #5A5A5F; --sep: #38383A; --card-border: transparent; --bar-bg: rgba(22, 22, 24, .8); --shadow: none;
+    --placeholder: #5A5A5F; --sep: #38383A; --card-border: transparent; --bar-bg: rgba(22, 22, 24, .8); --top-bar: rgba(0, 0, 0, .82); --shadow: none;
     color-scheme: dark;
   }
 }
@@ -68,16 +70,6 @@ input, select { font: inherit; color: inherit; letter-spacing: inherit; }
 .plus { color: var(--accent); }
 .center { text-align: center; }
 
-/* ---------- Start-Animation: Logo schärft sich ein, Vorhang gleitet nach oben ---------- */
-.splash { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: #16161A; will-change: transform; }
-.splash-mark { width: 104px; height: 104px; border-radius: 23px; animation: splash-mark .9s var(--ios) both; }
-.splash.is-leaving { animation: splash-up .7s cubic-bezier(.65, 0, .35, 1) forwards; }
-.splash.is-leaving .splash-inner { animation: splash-inner-up .45s ease-in forwards; }
-html.splash-done .splash { display: none; }
-html.splashing { overflow: hidden; }
-@keyframes splash-mark { from { opacity: 0; transform: scale(.9); filter: blur(8px); } to { opacity: 1; transform: none; filter: none; } }
-@keyframes splash-up { to { transform: translate3d(0, -100%, 0); } }
-@keyframes splash-inner-up { to { opacity: 0; transform: translate3d(0, -30px, 0); } }
 .reveal { transition: opacity .5s ease .1s; }
 html.splashing .reveal { opacity: 0; }
 @media (prefers-reduced-motion: reduce) {
@@ -91,7 +83,7 @@ html.splashing .reveal { opacity: 0; }
   background: transparent; transition: background-color .2s;
 }
 .appbar::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--sep); transform: scaleY(.5); opacity: 0; transition: opacity .2s; }
-.appbar.scrolled { background: var(--bar-bg); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); }
+.appbar.scrolled { background: var(--top-bar); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); }
 .appbar.scrolled::after { opacity: 1; }
 .appbar-title { font-weight: 600; font-size: 16px; opacity: 0; transition: opacity .2s; }
 .appbar.scrolled .appbar-title, #admin-screen .appbar-title { opacity: 1; }
@@ -107,7 +99,9 @@ main { padding: 0 16px calc(96px + env(safe-area-inset-bottom)); max-width: 720p
 .footnote { color: var(--muted); font-size: 13px; margin: 6px 16px 0; line-height: 1.4; }
 .footnote:empty { display: none; }
 
-.tab { animation: tab-in .2s ease-out; }
+#tab-calendar { animation: tab-in .2s ease-out; }
+/* Beim Tab-Wechsel: alter Inhalt bleibt unsichtbar, bis der neue gerendert ist und hereingleitet */
+.tab.entering > * { opacity: 0; }
 @keyframes tab-in { from { opacity: 0; } }
 
 /* ---------- Gruppierte Listen ---------- */
@@ -377,7 +371,7 @@ input.switch:disabled { opacity: .5; cursor: default; }
 .navbar {
   position: sticky; top: 0; z-index: 2; display: flex; align-items: center;
   height: calc(env(safe-area-inset-top) + 44px); padding: env(safe-area-inset-top) 8px 0;
-  background: var(--bar-bg); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px);
+  background: var(--top-bar); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px);
 }
 .navbar::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--sep); transform: scaleY(.5); opacity: 0; transition: opacity .2s; }
 .page.scrolled .navbar::after { opacity: 1; }
@@ -435,20 +429,37 @@ html, body { overscroll-behavior-x: none; }
 .cal-view { overflow-x: hidden; }
 .chips, .links { overscroll-behavior-x: contain; }
 
-/* ---------- Start-Animation: Logo mit weichem Schatten, sanfter Übergang in die App ---------- */
-.splash { background: var(--bg); }
-.splash-inner { display: grid; justify-items: center; gap: 16px; }
-.splash-mark {
-  width: 96px; height: 96px; border-radius: 22px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, .08), 0 14px 34px -10px rgba(0, 0, 0, .35);
-  animation: splash-mark .8s var(--ios) both;
+/* ---------- Start-Animation: derselbe Schriftzug wie das App-Icon, weicher Übergang in die App ---------- */
+.splash {
+  position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; overflow: hidden;
+  background: radial-gradient(120% 75% at 50% 42%, #24242C 0%, #16161A 48%, #0B0B0E 100%);
 }
-.splash-word { font-size: 22px; font-weight: 700; letter-spacing: -.02em; color: var(--text); animation: splash-word .7s var(--ios) .18s both; }
-.splash.is-leaving { animation: splash-fade .45s ease .1s forwards; }
-.splash.is-leaving .splash-inner { animation: splash-zoom .5s var(--ios) forwards; }
-@keyframes splash-mark { from { opacity: 0; transform: translateY(14px) scale(.92); box-shadow: 0 0 0 rgba(0, 0, 0, 0); } }
-@keyframes splash-word { from { opacity: 0; transform: translateY(6px); } }
-@keyframes splash-zoom { to { transform: scale(1.06); opacity: 0; } }
+.splash::before { /* warmes Licht hinter dem Plus */
+  content: ""; position: absolute; left: 50%; top: 50%; width: 420px; height: 420px; margin: -210px 0 0 -150px;
+  background: radial-gradient(circle, rgba(211, 84, 0, .28) 0%, rgba(211, 84, 0, .08) 38%, transparent 68%);
+  opacity: 0; animation: splash-glow 1.4s ease .35s forwards;
+}
+.splash-inner { position: relative; display: flex; align-items: flex-start; }
+.splash-word {
+  font-size: 54px; font-weight: 700; letter-spacing: -.035em; line-height: 1; color: #F5F5F7;
+  text-shadow: 0 10px 30px rgba(0, 0, 0, .45), 0 2px 6px rgba(0, 0, 0, .35);
+  animation: splash-word .9s cubic-bezier(.2, .8, .2, 1) both;
+}
+.splash-plus {
+  font-size: 46px; font-weight: 800; line-height: 1; color: #D35400; margin: -14px 0 0 2px;
+  text-shadow: 0 0 22px rgba(211, 84, 0, .55);
+  animation: splash-plus .75s cubic-bezier(.34, 1.56, .64, 1) .45s both;
+}
+.splash.is-leaving { animation: splash-fade .55s ease .05s forwards; }
+.splash.is-leaving .splash-inner { animation: splash-zoom .6s cubic-bezier(.4, 0, .2, 1) forwards; }
+html.splash-done .splash { display: none; }
+html.splashing { overflow: hidden; }
+html.splashing #app { transform: scale(.97); }
+#app { transition: transform .6s cubic-bezier(.2, .8, .2, 1); }
+@keyframes splash-word { from { opacity: 0; transform: translateY(8px) scale(.96); filter: blur(10px); letter-spacing: .02em; } }
+@keyframes splash-plus { from { opacity: 0; transform: scale(.2) rotate(-90deg); } }
+@keyframes splash-glow { to { opacity: 1; } }
+@keyframes splash-zoom { to { transform: scale(1.08); opacity: 0; filter: blur(4px); } }
 @keyframes splash-fade { to { opacity: 0; visibility: hidden; } }
 .reveal { transition: opacity .5s ease .12s; }
 /* Laufendes Semester im Diagramm: heller, Beschriftung in Akzentfarbe */
@@ -506,3 +517,11 @@ button, a, label, input, select { touch-action: manipulation; }
 .steps { margin: 0; padding: 12px 16px 12px 36px; display: flex; flex-direction: column; gap: 8px; font-size: 15px; line-height: 1.35; }
 a.row { color: inherit; text-decoration: none; }
 .pref-hint { text-transform: none; letter-spacing: 0; font-size: 13px; }
+
+/* ---------- Campus (USI) ---------- */
+.status-row .value { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); }
+.status-row:not(.row-nav) > span:first-child { flex: 1; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); opacity: .5; flex: none; }
+.dot.on { background: #34C759; opacity: 1; box-shadow: 0 0 0 3px color-mix(in srgb, #34C759 22%, transparent); }
+.notice-row { font-size: 14px; color: var(--accent); line-height: 1.35; }
+.news-row .meal-name { font-size: 15px; }
