@@ -23,7 +23,7 @@ const fmtAvg = new Intl.NumberFormat("de-AT", { minimumFractionDigits: 2, maximu
 // Service Worker: lädt neue Versionen im Hintergrund. Ob eine neuere Version online ist, prüft die
 // App selbst (Versionsnummer in sw.js), denn iOS meldet einen Wechsel des Service Workers nicht
 // zuverlässig. Dann erscheint oben ein Banner wie eine iOS-Mitteilung mit Knopf zum Neustarten.
-const BUILD = "studo-v25"; // muss zu VERSION in sw.js passen (Test prüft das)
+const BUILD = "studo-v26"; // muss zu VERSION in sw.js passen (Test prüft das)
 let swReg = null;
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").then((reg) => { swReg = reg; }).catch(() => {});
@@ -459,10 +459,24 @@ async function loadUnis() {
   updateLoginHint();
 }
 
+// Hintergrundfotos der Anmeldeseite (Bilddateien in frontend/, Namensnennung laut Lizenz)
+const LOGIN_PHOTOS = {
+  jku: { by: "Hertha Hurnaus", license: "CC BY-SA 4.0", licenseUrl: "https://creativecommons.org/licenses/by-sa/4.0/deed.de",
+    source: "https://commons.wikimedia.org/wiki/File:Caramel-architekten-science-park-jku.gif" },
+  abpu: { by: "Simon Bauer, Architekturbüro 1", license: "CC BY 3.0", licenseUrl: "https://creativecommons.org/licenses/by/3.0/deed.de",
+    source: "https://commons.wikimedia.org/wiki/File:Neubau_Anton_Bruckner_Privatuniversit%C3%A4t_4126_CC-BY_%27Architekturb%C3%BCro_1_-_Foto_Simon_Bauer%27.tif" },
+};
 function updateLoginHint() {
   const u = state.unis.find((x) => x.id === $("#login-uni").value);
   if (!u) return;
   $("#uni-name").textContent = u.name;
+  $("#login").dataset.uni = u.id; // Hintergrundfoto je Hochschule
+  const photo = LOGIN_PHOTOS[u.id], credit = $("#photo-credit");
+  credit.hidden = !photo;
+  if (photo) {
+    const link = (href, text) => { const a = el("a", "", text); a.href = href; a.target = "_blank"; a.rel = "noopener"; return a; };
+    credit.replaceChildren(`Foto: ${photo.by}, `, link(photo.source, "Wikimedia Commons"), ", ", link(photo.licenseUrl, photo.license), ", unscharf bearbeitet");
+  }
   const user = $("#login-user");
   user.placeholder = u.userLabel; user.setAttribute("aria-label", u.userLabel);
   $("#login-hint").textContent = u.auto
