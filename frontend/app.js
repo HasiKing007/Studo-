@@ -23,7 +23,7 @@ const fmtAvg = new Intl.NumberFormat("de-AT", { minimumFractionDigits: 2, maximu
 // Service Worker: lädt neue Versionen im Hintergrund. Ob eine neuere Version online ist, prüft die
 // App selbst (Versionsnummer in sw.js), denn iOS meldet einen Wechsel des Service Workers nicht
 // zuverlässig. Dann erscheint oben ein Banner wie eine iOS-Mitteilung mit Knopf zum Neustarten.
-const BUILD = "studo-v16"; // muss zu VERSION in sw.js passen (Test prüft das)
+const BUILD = "studo-v17"; // muss zu VERSION in sw.js passen (Test prüft das)
 let swReg = null;
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").then((reg) => { swReg = reg; }).catch(() => {});
@@ -425,11 +425,13 @@ function formPage(title, fields, submitLabel, onSubmit, footnote) {
 function hideAll() { ["#login", "#admin-login", "#admin-screen", "#app"].forEach((s) => ($(s).hidden = true)); closeAllPages(); }
 function showLogin() {
   hideAll(); $("#login").hidden = false; endSplash();
-  if (!state.unis.length) loadUnis();
+  loadUnis();
 }
 
+// Auswahl immer neu füllen: Die Liste kann schon geladen sein (z. B. nach dem Abmelden),
+// das Auswahlfeld enthält dann aber noch den Platzhalter "JKU Linz" aus index.html
 async function loadUnis() {
-  try { state.unis = await api("/api/unis"); } catch { return; }
+  if (!state.unis.length) { try { state.unis = await api("/api/unis"); } catch { return; } }
   const sel = $("#login-uni");
   sel.replaceChildren(...state.unis.map((u) => { const o = el("option", "", u.name); o.value = u.id; return o; }));
   try { const last = localStorage.getItem("studo_uni"); if (last && state.unis.some((u) => u.id === last)) sel.value = last; } catch {}
