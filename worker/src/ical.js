@@ -72,8 +72,8 @@ export function cleanTitle(summary) {
   return { title: title || summary, kind, nr, lecturer: null };
 }
 
-/** Parst einen iCal-Text in eine Liste normalisierter Termine. */
-export function parseICS(text) {
+/** Rohe VEVENTs: { NAME: { value, params } } je Termin, Zeilen bereits entfaltet. */
+export function readEvents(text) {
   const lines = text.replace(/\r\n?/g, "\n").replace(/\n[ \t]/g, "").split("\n");
   const raw = [];
   let cur = null;
@@ -90,8 +90,14 @@ export function parseICS(text) {
     }
     cur[name.toUpperCase()] = { value, params };
   }
+  return raw;
+}
 
-  return raw.filter((e) => e.DTSTART).map((e) => {
+export { parseDate as parseIcsDate, unescapeText as unescapeIcs };
+
+/** Parst einen iCal-Text in eine Liste normalisierter Termine. */
+export function parseICS(text) {
+  return readEvents(text).filter((e) => e.DTSTART).map((e) => {
     const summary = unescapeText(e.SUMMARY?.value ?? "").trim();
     const { title, kind, nr, lecturer } = cleanTitle(summary);
     const start = parseDate(e.DTSTART.value, e.DTSTART.params);

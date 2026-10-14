@@ -104,6 +104,8 @@
         <div id="today-list" class="group"></div>
         <h2 class="section-header" id="exams-head" hidden>Prüfungen &amp; Abgaben</h2>
         <div id="exam-list" class="group" hidden></div>
+        <h2 class="section-header" id="mensa-head" hidden>Mensa</h2>
+        <div id="mensa-card" hidden></div>
         <h2 class="section-header" id="links-head">Schnellzugriff</h2>
         <div id="quick-links" class="links"></div>
       </section>
@@ -177,6 +179,7 @@
 
         <div class="group group-spaced">
           <button class="row row-nav" id="btn-connection"><span>Verbindung zur Uni</span><svg class="chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+          <button class="row row-nav" id="btn-moodle"><span>Moodle-Abgaben</span><span class="value" id="set-moodle"></span><svg class="chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
           <button class="row row-nav" id="btn-abo"><span>Apple Kalender</span><svg class="chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
         </div>
 
@@ -185,6 +188,7 @@
           <div class="row"><span>Erscheinungsbild</span>
             <div class="segmented seg-sm" id="theme-seg"><button data-theme="light">Hell</button><button data-theme="auto">Auto</button><button data-theme="dark">Dunkel</button></div>
           </div>
+          <label class="row" id="mensa-row" hidden><span>Mensa am Home-Screen</span></label>
         </div>
 
         <div class="group group-spaced">

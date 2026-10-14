@@ -5,8 +5,10 @@
 import { DurableObject } from "cloudflare:workers";
 import { buildCalendar, parseICS } from "./ical.js";
 import { formatRoom, parseRoom } from "./rooms.js";
-import { demoEvents } from "./demo.js";
+import { demoDeadlines, demoEvents } from "./demo.js";
 import { jkuConnect, parseGrade } from "./jku.js";
+import { fetchMensa } from "./mensa.js";
+import { isMoodleLink, parseMoodle } from "./moodle.js";
 import { probeLogin } from "./probe.js";
 import { TAGS, detectTag } from "./tags.js";
 import { UNIS, matrikel } from "./unis.js";
@@ -36,6 +38,11 @@ CREATE TABLE IF NOT EXISTS course_settings (course_id TEXT PRIMARY KEY, attendan
 CREATE TABLE IF NOT EXISTS event_overrides (uid TEXT PRIMARY KEY, attendance INTEGER NOT NULL);
 -- Art des Termins von Hand gesetzt ("none" = erkannte Art ausblenden)
 CREATE TABLE IF NOT EXISTS event_tags (uid TEXT PRIMARY KEY, tag TEXT NOT NULL);
+-- Abgaben aus dem Moodle-Kalender (done = von Hand abgehakt)
+CREATE TABLE IF NOT EXISTS deadlines (
+  uid TEXT PRIMARY KEY, title TEXT NOT NULL, course TEXT, due TEXT NOT NULL, note TEXT,
+  done INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
 -- Kursübersicht bleibt erhalten, auch wenn alte Termine aufgeräumt werden (Semesterfilter)
 CREATE TABLE IF NOT EXISTS courses (
@@ -125,6 +132,7 @@ export class StudoStore extends DurableObject {
   async alarm() {
     if (!this.exists) return; // gelöschtes oder nie angelegtes Konto: nicht weiterlaufen
     try { await this.sync(); } catch (e) { console.warn("Sync fehlgeschlagen:", e.message); }
+    try { await this.syncMoodle(); } catch (e) { console.warn("Moodle-Sync fehlgeschlagen:", e.message); }
     finally { await this.ctx.storage.setAlarm(Date.now() + nextSyncDelay()); }
   }
 
@@ -159,6 +167,52 @@ export class StudoStore extends DurableObject {
     }
     this.track("sync", { events: stats.total });
     return stats;
+  }
+
+  /** Moodle-Abgaben holen (eigener Link, Fehler stören den Stundenplan nicht). */
+  async syncMoodle() {
+    const url = this.getSetting("moodle_url");
+    let items;
+    if (!url && this.env.DEMO === "1") items = demoDeadlines();
+    else if (!url) return null;
+    else {
+      try {
+        const res = await fetch(url.trim().replace(/^webcal:\/\//i, "https://"), {
+          headers: { "User-Agent": "StudoPlus/1.0" }, redirect: "follow",
+        });
+        if (!res.ok) throw new Error(`Moodle antwortet mit HTTP ${res.status}`);
+        const text = await res.text();
+        if (!text.slice(0, 2000).includes("BEGIN:VCALENDAR")) throw new Error("Antwort ist kein Kalender. Ist der Moodle-Link noch gültig?");
+        items = parseMoodle(text);
+      } catch (e) {
+        this.setSetting("moodle_error", e.message);
+        throw e;
+      }
+    }
+    const now = new Date(), stamp = now.toISOString();
+    const seen = new Set();
+    for (const d of items) {
+      seen.add(d.uid);
+      this.sql.exec(`INSERT INTO deadlines(uid, title, course, due, note, updated_at) VALUES(?,?,?,?,?,?)
+        ON CONFLICT(uid) DO UPDATE SET title=excluded.title, course=excluded.course, due=excluded.due,
+        note=excluded.note, updated_at=CASE WHEN deadlines.due<>excluded.due OR deadlines.title<>excluded.title
+        THEN excluded.updated_at ELSE deadlines.updated_at END`,
+        d.uid, d.title, d.course, d.due.toISOString(), d.note, stamp);
+    }
+    // Künftige Abgaben, die Moodle nicht mehr liefert, sind gestrichen; Altes nach 30 Tagen weg
+    for (const { uid } of this.sql.exec("SELECT uid FROM deadlines WHERE due > ?", stamp).toArray()) {
+      if (!seen.has(uid)) this.sql.exec("DELETE FROM deadlines WHERE uid=?", uid);
+    }
+    this.sql.exec("DELETE FROM deadlines WHERE due < ?", new Date(now - 30 * 86400_000).toISOString());
+    this.setSetting("moodle_error", null);
+    this.setSetting("moodle_sync", stamp);
+    return { total: items.length };
+  }
+
+  deadlinesPayload() {
+    const since = new Date(Date.now() - 3600_000).toISOString();
+    return this.sql.exec("SELECT uid, title, course, due, note, done FROM deadlines WHERE due >= ? ORDER BY due", since)
+      .toArray().map((d) => ({ ...d, done: !!d.done }));
   }
 
   room(raw) {
@@ -353,6 +407,7 @@ export class StudoStore extends DurableObject {
     if (alarm === null || alarm > Date.now() + nextSyncDelay()) await this.ctx.storage.setAlarm(Date.now() + nextSyncDelay());
     this.track("login", { uni, username });
     this.ctx.waitUntil(this.sync().catch(() => {}));
+    this.ctx.waitUntil(this.syncMoodle().catch(() => {}));
     return { ok: true, token, firstLogin };
   }
 
@@ -402,7 +457,12 @@ export class StudoStore extends DurableObject {
         categories: cats.length ? cats : null,
         priority: mandatory || tag ? 1 : null,
       };
-    }));
+    }).concat(this.sql.exec("SELECT * FROM deadlines WHERE done=0 AND due >= ? ORDER BY due", since).toArray().map((d) => ({
+      // Moodle-Abgabe als Termin ohne Dauer zum Fälligkeitszeitpunkt
+      uid: `moodle-${d.uid}`, summary: `Abgabe: ${d.title}`, start: d.due, end: d.due, stamp: now,
+      lastModified: d.updated_at, sequence: 0, status: "CONFIRMED", location: null,
+      description: [d.course, d.note].filter(Boolean).join("\n") || null, categories: ["Abgabe"], priority: 1,
+    }))));
   }
 
   touch(where, arg) {
@@ -436,6 +496,12 @@ export class StudoStore extends DurableObject {
       marker_style: this.getSetting("marker_style", "prefix"),
       feed: this.feedUrls(origin),
       links: this.uni.links,
+      moodle: {
+        connected: !!this.getSetting("moodle_url") || this.env.DEMO === "1",
+        error: this.getSetting("moodle_error"),
+        last_sync: this.getSetting("moodle_sync"),
+      },
+      mensa: (this.uni.mensa || []).length > 0,
     };
   }
 
@@ -493,7 +559,32 @@ export class StudoStore extends DurableObject {
           try { await this.sync(); } catch (e) { return error(502, `Sync fehlgeschlagen: ${e.message}`); }
         }
       }
+      if (typeof body.moodle_url === "string") {
+        const link = body.moodle_url.trim();
+        if (link && !isMoodleLink(link)) {
+          return error(422, "Das ist kein Moodle-Kalenderlink. Er enthält „calendar/export_execute.php“ und „authtoken“.");
+        }
+        this.setSetting("moodle_url", link || null);
+        this.setSetting("moodle_error", null);
+        if (!link) this.sql.exec("DELETE FROM deadlines");
+        else {
+          try { await this.syncMoodle(); } catch (e) { return error(502, `Moodle-Abgleich fehlgeschlagen: ${e.message}`); }
+        }
+        this.touch("1=?", 1);
+      }
       return json({ ok: true });
+    }
+
+    if (path === "/api/deadlines" && method === "GET") return json(this.deadlinesPayload());
+    const deadline = path.match(/^\/api\/deadlines\/(.+)$/);
+    if (deadline && method === "PUT") {
+      const b = await request.json().catch(() => ({}));
+      this.sql.exec("UPDATE deadlines SET done=?, updated_at=? WHERE uid=?", b.done ? 1 : 0, new Date().toISOString(), decodeURIComponent(deadline[1]));
+      return json(this.deadlinesPayload());
+    }
+
+    if (path === "/api/mensa" && method === "GET") {
+      return json({ canteens: this.uni.mensa?.length ? await fetchMensa(this.uni.mensa) : [] });
     }
 
     // Testmodus: Login des Uni-Systems einmal durchlaufen und nur die Seitenstruktur beschreiben
@@ -530,7 +621,9 @@ export class StudoStore extends DurableObject {
         const last = Date.parse(this.getSetting("last_sync") || 0);
         if (Date.now() - last < 3 * 60_000) return json({ skipped: true });
       }
-      try { return json(await this.sync()); } catch (e) { return error(502, `Sync fehlgeschlagen: ${e.message}`); }
+      const moodle = this.syncMoodle().catch(() => null); // eigener Fehlertext in moodle_error
+      try { const r = await this.sync(); await moodle; return json(r); }
+      catch (e) { await moodle; return error(502, `Sync fehlgeschlagen: ${e.message}`); }
     }
 
     if (path === "/api/feed/rotate" && method === "POST") {
