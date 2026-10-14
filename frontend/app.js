@@ -23,7 +23,7 @@ const fmtAvg = new Intl.NumberFormat("de-AT", { minimumFractionDigits: 2, maximu
 // Service Worker: lädt neue Versionen im Hintergrund. Ob eine neuere Version online ist, prüft die
 // App selbst (Versionsnummer in sw.js), denn iOS meldet einen Wechsel des Service Workers nicht
 // zuverlässig. Dann erscheint oben ein Banner wie eine iOS-Mitteilung mit Knopf zum Neustarten.
-const BUILD = "studo-v23"; // muss zu VERSION in sw.js passen (Test prüft das)
+const BUILD = "studo-v24"; // muss zu VERSION in sw.js passen (Test prüft das)
 let swReg = null;
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").then((reg) => { swReg = reg; }).catch(() => {});
@@ -1339,16 +1339,29 @@ function currentSemester(d = new Date()) {
   const y = d.getFullYear(), m = d.getMonth() + 1;
   return normSem(m >= 10 ? `${y}W` : m <= 2 ? `${y - 1}W` : `${y}S`);
 }
-// Dieselbe LVA kann mehrfach in KUSSS stehen (z. B. Notenverbesserung, Teilleistungen):
-// pro LVA zählt nur die neueste positive Beurteilung, sonst würden ECTS doppelt gezählt
-function uniquePassed(grades) {
-  const best = new Map();
-  for (const g of grades.filter(isPassed)) {
-    const k = g.nr ? `nr:${String(g.nr).replace(/\D/g, "")}:${g.kind || ""}` : `t:${normTitle(g.title)}:${g.kind || ""}`;
-    const prev = best.get(k);
-    if (!prev || String(g.date || "") > String(prev.date || "")) best.set(k, g);
+// Warum eine Note (nicht) zu den ECTS zählt. Dieselbe LVA kann mehrfach in KUSSS stehen
+// (Notenverbesserung, Wiederholung mit neuer LVA-Nummer): pro LVA zählt nur die neueste positive
+// Beurteilung, erkannt an gleicher Nummer oder gleichem Titel und Typ. Der Nutzer kann jede Note
+// selbst ein- oder ausschließen (z. B. Freifächer über dem Kontingent).
+function ectsStatus(grades) {
+  const out = new Map(), seen = new Set();
+  const sorted = [...grades].sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+  for (const g of sorted) {
+    const keys = [`t:${normTitle(g.title)}:${g.kind || ""}`];
+    if (g.nr) keys.push(`nr:${String(g.nr).replace(/\D/g, "")}:${g.kind || ""}`);
+    let why = null;
+    if (!isPassed(g)) why = g.grade === 5 || g.passed === false ? "negativ" : "ohne Beurteilung";
+    else if (keys.some((k) => seen.has(k))) why = "doppelt";
+    if (g.counted === false) why = "ausgenommen";
+    else if (g.counted === true && isPassed(g)) why = null;
+    if (!why) keys.forEach((k) => seen.add(k));
+    out.set(g, why);
   }
-  return [...best.values()];
+  return out;
+}
+function uniquePassed(grades) {
+  const st = ectsStatus(grades);
+  return grades.filter((g) => st.get(g) === null);
 }
 function studyNumbers(grades, target) {
   const passed = uniquePassed(grades);
@@ -1385,6 +1398,7 @@ async function renderStudy() {
   const prog = programs.find((p) => String(p.id) === state.program);
   const grades = data.grades.filter((g) => state.program === "all" || String(g.program_id) === state.program);
   const target = (prog ? prog.ects_target : programs.length === 1 ? programs[0].ects_target : programs.reduce((s, p) => s + (p.ects_target || 0), 0)) || 180;
+  state.ectsWhy = ectsStatus(state.gradesData.grades);
   const n = studyNumbers(grades, target);
   $("#study-sub").textContent = prog ? prog.name : programs.length === 1 ? programs[0].name : "Studienfortschritt";
 
@@ -1474,10 +1488,11 @@ async function renderStudy() {
   for (const g of grades) (groups[g.semester || "Ohne Semester"] ??= []).push(g);
   const out = [];
   for (const [sem, list] of Object.entries(groups).sort((a, b) => semSort(b[0]) - semSort(a[0]))) {
-    const ects = list.filter(isPassed).reduce((s, g) => s + (+g.ects || 0), 0);
+    const counted = new Set(n.passed);
+    const ects = list.filter((g) => counted.has(g)).reduce((s, g) => s + (+g.ects || 0), 0);
     out.push(header(`${sem} · ${fmtNum.format(ects)} ECTS`), group(...list.map(gradeRow)));
   }
-  if (out.length) out.push(note("Rechts steht die Note. ✓ heißt „mit Erfolg teilgenommen“ (ohne Ziffernnote)."));
+  if (out.length) out.push(note("Rechts steht die Note. ✓ heißt „mit Erfolg teilgenommen“ (ohne Ziffernnote). Negative und doppelte Einträge zählen nicht zu den ECTS, in jeder Note kannst du das selbst ändern."));
   $("#grade-list").replaceChildren(...out);
 }
 
@@ -1493,7 +1508,9 @@ function gradeRow(g) {
   const text = el("span", "course-text");
   const t = titleWithKind(g.kind, g.title); t.className = "course-title";
   const prog = state.gradesData.programs.find((p) => p.id === g.program_id);
-  text.append(t, el("span", "course-sub", [g.date ? fmtDate.format(new Date(g.date)) : null, g.ects ? `${fmtNum.format(g.ects)} ECTS` : null, prog?.name].filter(Boolean).join(" · ") || "–"));
+  const why = state.ectsWhy?.get(g);
+  const ects = g.ects ? `${fmtNum.format(g.ects)} ECTS${why && why !== "negativ" && why !== "ohne Beurteilung" ? ` zählen nicht (${why})` : ""}` : null;
+  text.append(t, el("span", "course-sub", [g.date ? fmtDate.format(new Date(g.date)) : null, ects, prog?.name].filter(Boolean).join(" · ") || "–"));
   r.append(text, gradePill(g), chev());
   r.addEventListener("click", () => openGrade(g));
   return r;
@@ -1522,6 +1539,17 @@ function openGrade(g) {
       catch (err) { alert(err.message); }
     });
     label.append(el("span", "row-label", "Studium"), sel);
+    const why = (state.ectsWhy || ectsStatus(state.gradesData.grades)).get(g);
+    if (isPassed(g) && g.ects) {
+      const cRow = el("label", "row");
+      cRow.append(el("span", "", "Zu den ECTS zählen"), makeSwitch(!why, async (v) => {
+        try { state.gradesData = await put(`/api/grades/${g.id}`, { counted: v }); g.counted = v; haptic(); renderStudy(); }
+        catch (err) { alert(err.message); }
+      }));
+      body.append(header("ECTS"), group(cRow), note(why === "doppelt"
+        ? "Diese LVA steht mehrfach in KUSSS, es zählt nur die neueste positive Note. Ist es eine andere LVA mit gleichem Namen, schalte das hier ein."
+        : "Ausschalten, wenn die LVA nicht für dein Studium zählt, z. B. ein Freifach über deinem Kontingent."));
+    }
     body.append(header("Zuordnung"), group(label),
       note(programs.length ? "Bestimmt, zu welchem Studium die ECTS zählen." : "Studienrichtungen legst du unter Einstellungen › Persönliche Daten an."));
     if (g.source === "manual") {

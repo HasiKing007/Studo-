@@ -107,7 +107,15 @@ export const UNIS = {
     auth: "local",
     userLabel: "Benutzername",
     userPlaceholder: "Benutzername",
-    probe: { start: ["https://online.uni-salzburg.at/plus_online/ee/ui/ca2/app/desktop/", "https://online.uni-salzburg.at/plus_online/webnav.ini", "https://online.uni-salzburg.at/"] }, // Testmodus, bis die Anbindung fertig ist
+    probe: {
+      // Die neue CAMPUSonline-Oberfläche baut den Login per JavaScript. Dahinter steckt Keycloak:
+      // dessen Konto-Seite leitet auf ein normales Login-Formular weiter, das der Test ausfüllen kann.
+      start: [
+        "https://online.uni-salzburg.at/plus_online/co/public/sec/auth/realms/CAMPUSonline/account",
+        "https://online.uni-salzburg.at/plus_online/co/public/sec/auth/realms/CAMPUSonline/protocol/openid-connect/auth?client_id=account-console&response_type=code&scope=openid&redirect_uri=https%3A%2F%2Fonline.uni-salzburg.at%2Fplus_online%2Fco%2Fpublic%2Fsec%2Fauth%2Frealms%2FCAMPUSonline%2Faccount%2F",
+        "https://online.uni-salzburg.at/plus_online/ee/ui/ca2/app/desktop/",
+      ],
+    }, // Testmodus, bis die Anbindung fertig ist
     mensa: [{ id: 1109, name: "Mensa NaWi", hours: "Mo–Fr 11:30–13:30" }],
     icalHint: "PLUSonline → Mein Kalender → Exportieren / Abonnieren, Link kopieren.",
     links: [

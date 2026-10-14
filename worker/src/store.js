@@ -70,6 +70,8 @@ CREATE TABLE IF NOT EXISTS grades (
   grade_text TEXT, grade INTEGER, passed INTEGER, ects REAL, sws REAL, semester TEXT,
   program_id INTEGER, source TEXT NOT NULL DEFAULT 'manual', updated_at TEXT NOT NULL
 );
+-- Ob eine Note zu den ECTS zählt (vom Nutzer festgelegt). Eigene Tabelle, weil KUSSS-Noten bei jedem Sync neu geschrieben werden
+CREATE TABLE IF NOT EXISTS grade_counts (gkey TEXT PRIMARY KEY, counted INTEGER NOT NULL);
 `;
 
 const EFFECTIVE = `
@@ -482,6 +484,8 @@ export class StudoStore extends DurableObject {
         }
         return { ...g, passed: g.passed === null ? null : !!g.passed };
       });
+    const counts = new Map(this.sql.exec("SELECT gkey, counted FROM grade_counts").toArray().map((r) => [r.gkey, !!r.counted]));
+    for (const g of grades) g.counted = counts.get(g.key || `id:${g.id}`) ?? null;
     const programs = this.sql.exec("SELECT * FROM programs ORDER BY id").toArray();
     return {
       grades, programs,
@@ -902,6 +906,12 @@ export class StudoStore extends DurableObject {
     if (gradeId && method === "PUT") {
       const b = await request.json().catch(() => ({}));
       if ("program_id" in b) this.sql.exec("UPDATE grades SET program_id=? WHERE id=?", b.program_id ? +b.program_id : null, +gradeId[1]);
+      if ("counted" in b) {
+        const g = this.sql.exec("SELECT id, key FROM grades WHERE id=?", +gradeId[1]).toArray()[0];
+        const gkey = g && (g.key || `id:${g.id}`);
+        if (gkey && b.counted === null) this.sql.exec("DELETE FROM grade_counts WHERE gkey=?", gkey);
+        else if (gkey) this.sql.exec("INSERT INTO grade_counts(gkey, counted) VALUES(?,?) ON CONFLICT(gkey) DO UPDATE SET counted=excluded.counted", gkey, b.counted ? 1 : 0);
+      }
       return json(this.gradesPayload());
     }
     if (gradeId && method === "DELETE") {

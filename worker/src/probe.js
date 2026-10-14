@@ -16,6 +16,13 @@ function hints(page) {
     try { const u = new URL(m[1], page.url); out.add(`${u.hostname}${u.pathname}`); } catch { /* ungültige Adresse */ }
     if (out.size >= 8) break;
   }
+  // Seiten, die sich per JavaScript aufbauen: Skript-Adressen verraten, wohin der Login geht
+  if (!/<form\b/i.test(page.html)) {
+    for (const m of page.html.matchAll(/<script\b[^>]*\bsrc\s*=\s*["']([^"'#?]+)/gi)) {
+      try { const u = new URL(m[1], page.url); out.add(`${u.hostname}${u.pathname}`); } catch { /* ungültige Adresse */ }
+      if (out.size >= 12) break;
+    }
+  }
   return [...out];
 }
 
