@@ -20,30 +20,60 @@ const fmtDate = new Intl.DateTimeFormat("de-AT", { day: "numeric", month: "numer
 const fmtNum = new Intl.NumberFormat("de-AT", { maximumFractionDigits: 2 });
 const fmtAvg = new Intl.NumberFormat("de-AT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// Service Worker: lädt neue Versionen im Hintergrund. Sobald eine neue Version übernommen wurde,
-// läuft auf dem Bildschirm noch die alte -> Hinweis mit Knopf zum Neustarten.
+// Service Worker: lädt neue Versionen im Hintergrund. Ob eine neuere Version online ist, prüft die
+// App selbst (Versionsnummer in sw.js), denn iOS meldet einen Wechsel des Service Workers nicht
+// zuverlässig. Dann erscheint oben ein Banner wie eine iOS-Mitteilung mit Knopf zum Neustarten.
+const BUILD = "studo-v16"; // muss zu VERSION in sw.js passen (Test prüft das)
+let swReg = null;
 if ("serviceWorker" in navigator) {
-  let hadController = !!navigator.serviceWorker.controller;
-  navigator.serviceWorker.register("/sw.js").then((reg) => {
-    document.addEventListener("visibilitychange", () => { if (!document.hidden) reg.update().catch(() => {}); });
-  }).catch(() => {});
-  navigator.serviceWorker.addEventListener("controllerchange", () => {
-    // Erste Installation übernimmt die Seite nur – erst ein späterer Wechsel ist eine neue Version
-    if (hadController) showUpdateToast(); else hadController = true;
-  });
+  navigator.serviceWorker.register("/sw.js").then((reg) => { swReg = reg; }).catch(() => {});
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) checkForUpdate(); });
+  setTimeout(checkForUpdate, 2500);
+}
+let lastUpdateCheck = 0;
+async function checkForUpdate() {
+  if (Date.now() - lastUpdateCheck < 30_000 || document.querySelector(".update-toast")) return;
+  lastUpdateCheck = Date.now();
+  try {
+    const res = await fetch(`/sw.js?check=${Date.now()}`, { cache: "no-store" });
+    const online = (await res.text()).match(/const VERSION = "([^"]+)"/)?.[1];
+    if (online && online !== BUILD) { swReg?.update().catch(() => {}); showUpdateToast(); }
+  } catch { /* offline: später erneut */ }
+}
+// Neue Version übernehmen: Service Worker aktualisieren, kurz auf den Wechsel warten, neu laden
+async function applyUpdate() {
+  try {
+    await swReg?.update();
+    if (swReg?.installing || swReg?.waiting) {
+      await new Promise((ok) => { navigator.serviceWorker.addEventListener("controllerchange", ok, { once: true }); setTimeout(ok, 6000); });
+    }
+  } catch { /* trotzdem neu laden */ }
+  location.reload();
 }
 function showUpdateToast() {
   if (document.querySelector(".update-toast")) return;
-  const t = document.createElement("div");
-  t.className = "update-toast"; t.setAttribute("role", "status");
-  const txt = document.createElement("span");
-  txt.innerHTML = "<strong>Neue Version verfügbar</strong>Bitte neu starten, um sie zu nutzen.";
-  const b = document.createElement("button");
-  b.textContent = "Neu starten";
-  b.addEventListener("click", () => location.reload());
-  t.append(txt, b);
+  const t = el("div", "update-toast"); t.setAttribute("role", "status");
+  const icon = el("img", "update-icon"); icon.src = "/icons/icon-192.png"; icon.alt = "";
+  const txt = el("div", "update-text");
+  txt.append(el("strong", "", "Neue Version verfügbar"), el("span", "", "Bereit zum Installieren."));
+  const b = el("button", "", "Neu starten");
+  b.addEventListener("click", (e) => { e.stopPropagation(); haptic(); b.disabled = true; b.textContent = "Lädt …"; applyUpdate(); });
+  t.append(icon, txt, b);
   document.body.append(t);
-  requestAnimationFrame(() => requestAnimationFrame(() => t.classList.add("in")));
+  // Hereinfedern wie eine iOS-Mitteilung, dabei ein kurzes Tippen
+  requestAnimationFrame(() => requestAnimationFrame(() => { t.classList.add("in"); haptic(); }));
+  // Nach oben wischen blendet das Banner aus (bis zum nächsten Öffnen der App)
+  let y0 = null, dy = 0;
+  t.addEventListener("touchstart", (e) => { y0 = e.touches[0].clientY; dy = 0; t.classList.add("drag"); }, { passive: true });
+  t.addEventListener("touchmove", (e) => {
+    if (y0 === null) return;
+    dy = e.touches[0].clientY - y0;
+    t.style.transform = `translate3d(0, ${dy < 0 ? dy : Math.sqrt(dy) * 3}px, 0)`; // nach unten nur Gummiband
+  }, { passive: true });
+  t.addEventListener("touchend", () => {
+    y0 = null; t.classList.remove("drag"); t.style.transform = "";
+    if (dy < -30) { t.classList.remove("in"); haptic(); setTimeout(() => t.remove(), 500); lastUpdateCheck = Date.now(); }
+  });
 }
 
 // ---------- Erscheinungsbild (Standard: hell) ----------
@@ -116,8 +146,21 @@ function inDays(d) {
   return n === 0 ? "Heute" : n === 1 ? "Morgen" : fmtDayShort.format(d);
 }
 
-// iOS: Der native <input switch> (Safari 17.4+) gibt selbst ein Taptic-Feedback; Android nutzt vibrate().
-function haptic() { if (navigator.vibrate) navigator.vibrate(8); }
+// Haptik: Android über vibrate(). iOS hat dafür keine Schnittstelle, aber ein Schalter (<input switch>,
+// Safari 18) gibt beim Umschalten ein Taptic-Feedback, auch wenn er über ein verstecktes Label ausgelöst wird.
+let hapticLabel = null;
+function haptic() {
+  if (navigator.vibrate) { navigator.vibrate(8); return; }
+  try {
+    if (!hapticLabel) {
+      hapticLabel = document.createElement("label");
+      hapticLabel.className = "haptic-proxy"; hapticLabel.setAttribute("aria-hidden", "true");
+      const sw = document.createElement("input"); sw.type = "checkbox"; sw.setAttribute("switch", ""); sw.tabIndex = -1;
+      hapticLabel.append(sw); document.body.append(hapticLabel);
+    }
+    hapticLabel.click();
+  } catch { /* ohne Haptik */ }
+}
 
 function el(tag, cls, text) {
   const n = document.createElement(tag);
@@ -209,7 +252,7 @@ function makeSwitch(checked, onChange) {
   const sw = el("input", "switch");
   sw.type = "checkbox"; sw.setAttribute("switch", ""); sw.checked = checked;
   sw.addEventListener("change", async () => {
-    haptic();
+    if (navigator.vibrate) navigator.vibrate(8); // iOS: der Schalter gibt sein Taptic-Feedback selbst
     try { await onChange(sw.checked); } catch (err) { sw.checked = !sw.checked; alert(err.message); }
   });
   return sw;

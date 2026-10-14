@@ -1,6 +1,6 @@
 // Service Worker: App-Shell offline verfügbar, API immer frisch (Netzwerk zuerst,
 // bei Offline die letzte Antwort aus dem Cache -> Stundenplan auch im Funkloch lesbar).
-const VERSION = "studo-v15";
+const VERSION = "studo-v16";
 const SHELL = ["/", "/index.html", "/styles.css", "/app.js", "/manifest.json",
                "/icons/icon-192.png", "/icons/icon-512.png", "/apple-touch-icon.png"];
 
@@ -18,7 +18,8 @@ self.addEventListener("activate", (e) => {
 
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
-  if (url.origin !== location.origin || url.pathname.startsWith("/cal/")) return;
+  // sw.js selbst nie aus dem Cache: daran erkennt die App neue Versionen
+  if (url.origin !== location.origin || url.pathname.startsWith("/cal/") || url.pathname === "/sw.js") return;
 
   if (url.pathname.startsWith("/api/")) {
     if (e.request.method !== "GET") return; // Schreibzugriffe nie cachen
