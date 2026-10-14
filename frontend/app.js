@@ -160,14 +160,12 @@ const TAGS = {
   vortrag: "Vortrag", praesentation: "Präsentation", abgabe: "Abgabe", einsicht: "Einsicht",
 };
 const TAG_SHORT = { teilklausur: "Teilkl.", nachklausur: "Nachkl.", praesentation: "Präs." };
-function tagGroup(tag) { return /klausur/.test(tag) ? "exam" : tag === "einsicht" ? "info" : "task"; }
-function tagPill(tag) { return tag && TAGS[tag] ? el("span", `tag tag-${tagGroup(tag)}`, TAGS[tag]) : null; }
-function evTitle(ev, node = "span") {
-  const n = titleWithKind(ev.kind, ev.title, node);
-  const t = tagPill(ev.tag);
-  if (t) n.prepend(t);
-  return n;
+// Die Art steht im Namen: "Klausur: Analysis 1" (außer der Titel sagt es schon selbst)
+function tagName(ev) {
+  const label = ev.tag && TAGS[ev.tag];
+  return label && !ev.title.toLowerCase().includes(label.toLowerCase()) ? `${label}: ${ev.title}` : ev.title;
 }
+function evTitle(ev, node = "span") { return titleWithKind(ev.kind, tagName(ev), node); }
 
 // Kurzname für die Wochenansicht: eigenes Kürzel, sonst aus den Anfangsbuchstaben der wichtigen Wörter
 // ("Marktorientiertes Management: Grundlagen" -> "MMG", "Lineare Algebra" -> "LA", "Statistik" -> "Stati")
@@ -573,6 +571,7 @@ function openEvent(ev) {
     body.append(group(
       row("Ort", ev.location || "unbekannt"),
       ev.room_raw && ev.room_raw !== ev.room ? row("Laut Uni", ev.room_raw) : null,
+      ev.note ? row("Notiz", ev.note) : null,
       course?.lecturer ? row("Lehrende", course.lecturer) : null,
       ev.status === "cancelled" ? row("Status", "Entfällt") : null,
     ));
@@ -610,7 +609,7 @@ function openEvent(ev) {
     const showTagNote = () => {
       tagNote.textContent = ev.tag_auto
         ? `Aus dem Uni-Kalender erkannt: ${TAGS[ev.tag_auto]}.${ev.tag !== ev.tag_auto ? " Du hast das geändert." : ""}`
-        : "Erscheint im Kalender, auf der Startseite und im Apple Kalender vor dem Namen.";
+        : "Steht dann im Namen des Termins, in der App und im Apple Kalender.";
     };
     const choices = [["", "Normal"], ...Object.entries(TAGS)];
     const btns = choices.map(([k, label]) => {
@@ -680,7 +679,7 @@ async function renderExams(now) {
     const s = new Date(e.start);
     const n = Math.round((midnight(s) - midnight(now)) / 86400000);
     const r = el("button", "row row-nav exam-row");
-    const t = el("span", "exam-title"); t.append(tagPill(e.tag), e.title);
+    const t = el("span", "exam-title", tagName(e));
     r.append(t, el("span", "value", n <= 1 ? `${inDays(s)}, ${fmtTime.format(s)}` : `in ${n} Tagen`), chev());
     r.addEventListener("click", () => openEvent(e));
     return r;
@@ -870,7 +869,6 @@ function timeGrid(days, byDay, mode) {
       const dur = Math.max(20, ((p.en - p.s) / 3600000) * HOUR - 2);
       const b = el("button", "block");
       b.classList.toggle("cancelled", p.e.status === "cancelled");
-      if (p.e.tag) b.classList.add(`t-${tagGroup(p.e.tag)}`);
       b.style.top = `${top + 1}px`; b.style.height = `${dur}px`;
       b.style.left = `${(p.lane / n) * 100}%`; b.style.width = `calc(${100 / n}% - 3px)`;
       if (mode === "day") {
@@ -998,11 +996,12 @@ async function openCourse(id) {
     body.append(header("Nächste Termine"), upcoming);
     const from = new Date(), to = c.last_end ? new Date(c.last_end) : addDays(from, 120);
     (to > from ? fetchEvents(from, to) : Promise.resolve([])).then((evs) => {
-      evs = evs.filter((e) => e.course_id === id).slice(0, 10);
+      evs = evs.filter((e) => e.course_id === id);
       upcoming.replaceChildren(...evs.map((e) => {
         const s = new Date(e.start);
         const r = row(`${inDays(s)}`, `${fmtTime.format(s)} · ${e.status === "cancelled" ? "Entfällt" : e.location || "Ort unbekannt"}`, "tap nowrap-label");
-        if (e.tag) r.firstChild.append(" ", tagPill(e.tag));
+        if (e.note && !e.tag && e.note.length <= 30) r.firstChild.append(` · ${e.note}`);
+        if (e.tag) r.firstChild.append(` · ${TAGS[e.tag]}`);
         r.addEventListener("click", () => openEvent(e));
         return r;
       }));

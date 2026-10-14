@@ -60,7 +60,7 @@ LEFT JOIN event_overrides o ON o.uid = e.uid
 LEFT JOIN event_tags t ON t.uid = e.uid
 LEFT JOIN course_settings cs ON cs.course_id = e.course_id`;
 
-/** Art eines Termins: von Hand gesetzt, sonst aus Titel und Beschreibung erkannt. */
+/** Art eines Termins: von Hand gesetzt, sonst aus Titel oder kurzer Notiz erkannt. */
 function eventTag(r) {
   const auto = detectTag(r.title, r.description);
   const tag = r.tag_set === "none" ? null : r.tag_set || auto;
@@ -384,8 +384,8 @@ export class StudoStore extends DurableObject {
       const mandatory = !!r.attendance;
       const cancelled = r.status === "cancelled";
       const { tag } = eventTag(r);
-      let summary = (r.kind ? `${r.kind} ` : "") + r.title; // LVA-Art immer zuerst
-      if (tag && !r.title.toLowerCase().includes(TAGS[tag].toLowerCase())) summary = `${TAGS[tag]}: ${summary}`;
+      const named = tag && !r.title.toLowerCase().includes(TAGS[tag].toLowerCase()) ? `${TAGS[tag]}: ${r.title}` : r.title;
+      let summary = (r.kind ? `${r.kind} ` : "") + named; // LVA-Art immer zuerst, wie in der App
       if (mandatory) summary = marker + summary;
       if (cancelled) summary = "Entfällt: " + summary;
       const notes = [];
@@ -550,7 +550,7 @@ export class StudoStore extends DurableObject {
         new Date(start).toISOString(), new Date(end).toISOString()).toArray();
       return json(rows.map((r) => ({
         uid: r.uid, course_id: r.course_id, title: r.title, kind: r.kind, start: r.start, end: r.end,
-        status: r.status, building: r.building, room: r.room, room_raw: r.room_raw,
+        status: r.status, building: r.building, room: r.room, room_raw: r.room_raw, note: r.description || null,
         location: formatRoom(r.building, r.room), attendance: !!r.attendance,
         is_override: !!r.is_override, course_attendance: !!r.course_attendance, short: r.short || null,
         ...eventTag(r),

@@ -1,6 +1,6 @@
 // Service Worker: App-Shell offline verfügbar, API immer frisch (Netzwerk zuerst,
 // bei Offline die letzte Antwort aus dem Cache -> Stundenplan auch im Funkloch lesbar).
-const VERSION = "studo-v12";
+const VERSION = "studo-v14";
 const SHELL = ["/", "/index.html", "/styles.css", "/app.js", "/manifest.json",
                "/icons/icon-192.png", "/icons/icon-512.png", "/apple-touch-icon.png"];
 
