@@ -22,6 +22,7 @@ export const UNIS = {
     ],
   },
   tuwien: {
+    hidden: true, // nicht mehr zur Auswahl, bestehende Konten funktionieren weiter
     name: "TU Wien",
     auth: "local",
     userLabel: "Matrikelnummer",
@@ -46,6 +47,7 @@ export const UNIS = {
     ],
   },
   tugraz: {
+    hidden: true, // nicht mehr zur Auswahl, bestehende Konten funktionieren weiter
     name: "TU Graz",
     auth: "local",
     userLabel: "Benutzername",
@@ -58,6 +60,7 @@ export const UNIS = {
     ],
   },
   unigraz: {
+    hidden: true, // nicht mehr zur Auswahl, bestehende Konten funktionieren weiter
     name: "Universität Graz",
     auth: "local",
     userLabel: "Benutzername",
@@ -70,6 +73,7 @@ export const UNIS = {
     ],
   },
   wu: {
+    hidden: true, // nicht mehr zur Auswahl, bestehende Konten funktionieren weiter
     name: "WU Wien",
     auth: "local",
     userLabel: "Matrikelnummer",
@@ -82,6 +86,7 @@ export const UNIS = {
     ],
   },
   uibk: {
+    hidden: true, // nicht mehr zur Auswahl, bestehende Konten funktionieren weiter
     name: "Universität Innsbruck",
     auth: "local",
     userLabel: "Benutzername",
@@ -129,7 +134,7 @@ export const UNIS = {
 
 /** Öffentliche Sicht für den Login-Bildschirm (ohne interne Felder). */
 export function publicUnis() {
-  return Object.entries(UNIS).map(([id, u]) => ({
+  return Object.entries(UNIS).filter(([, u]) => !u.hidden).map(([id, u]) => ({
     id, name: u.name, auto: u.auth === "jku", userLabel: u.userLabel, userPlaceholder: u.userPlaceholder,
   }));
 }
