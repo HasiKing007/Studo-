@@ -535,29 +535,47 @@ a.row { color: inherit; text-decoration: none; }
     radial-gradient(48% 40% at 55% 92%, color-mix(in srgb, var(--accent) 20%, transparent), transparent 72%);
   filter: blur(36px); animation: login-drift 22s ease-in-out infinite alternate;
 }
-/* Foto je Hochschule (JKU: Science Park, ABPU: Neubau), weichgezeichnet und getönt, damit Text lesbar bleibt */
+/* Foto je Hochschule: gut erkennbar, nur leicht weichgezeichnet. Lesbarkeit kommt von der Glaskarte, nicht vom Verwischen */
 #login::after {
-  content: ""; position: absolute; inset: -12%; z-index: -1; pointer-events: none; opacity: 0; transition: opacity .6s ease;
-  background: linear-gradient(var(--login-tint), var(--login-tint)), var(--login-photo, none) center 40% / cover no-repeat;
-  filter: blur(26px) saturate(1.25);
+  content: ""; position: absolute; inset: -8px; z-index: -1; pointer-events: none; opacity: 0; transition: opacity .6s ease;
+  background: linear-gradient(var(--login-tint-top), transparent 30%, transparent 62%, var(--login-tint-bottom)), linear-gradient(var(--login-tint), var(--login-tint)), var(--login-photo, none) center 40% / cover no-repeat;
+  filter: blur(2px) saturate(1.1);
 }
 #login[data-uni="jku"] { --login-photo: url("/login-bg-jku.jpg"); }
 #login[data-uni="abpu"] { --login-photo: url("/login-bg-abpu.jpg"); }
 #login[data-uni="plus"] { --login-photo: url("/login-bg-plus.jpg"); }
 #login[data-uni="jku"]::after, #login[data-uni="abpu"]::after, #login[data-uni="plus"]::after { opacity: 1; }
+/* Mit Foto keine Farbwolken, die würden es nur trüben */
+#login:is([data-uni="jku"], [data-uni="abpu"], [data-uni="plus"])::before { display: none; }
 @keyframes login-drift { to { transform: translate3d(3%, -2%, 0) rotate(6deg) scale(1.06); } }
-:root { --login-tint: rgba(242, 242, 247, .5); }
-:root[data-theme="dark"] { --login-tint: rgba(0, 0, 0, .58); }
-@media (prefers-color-scheme: dark) { :root[data-theme="auto"] { --login-tint: rgba(0, 0, 0, .58); } }
-.photo-credit { position: absolute; left: 0; right: 0; bottom: calc(10px + env(safe-area-inset-bottom)); text-align: center; font-size: 11px; color: var(--muted); margin: 0; }
+:root { --login-tint: rgba(242, 242, 247, .08); --login-tint-top: rgba(242, 242, 247, .35); --login-tint-bottom: rgba(0, 0, 0, .35); --login-glass: rgba(255, 255, 255, .62); --login-cell: rgba(255, 255, 255, .78); }
+:root[data-theme="dark"] { --login-tint: rgba(0, 0, 0, .3); --login-tint-top: rgba(0, 0, 0, .3); --login-tint-bottom: rgba(0, 0, 0, .5); --login-glass: rgba(28, 28, 30, .58); --login-cell: rgba(58, 58, 60, .6); }
+@media (prefers-color-scheme: dark) { :root[data-theme="auto"] { --login-tint: rgba(0, 0, 0, .3); --login-tint-top: rgba(0, 0, 0, .3); --login-tint-bottom: rgba(0, 0, 0, .5); --login-glass: rgba(28, 28, 30, .58); --login-cell: rgba(58, 58, 60, .6); } }
+/* Bildnachweis als kleine Glaspille, auf jedem Foto lesbar */
+.photo-credit {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(12px + env(safe-area-inset-bottom)); width: max-content; max-width: calc(100% - 32px);
+  text-align: center; font-size: 11px; line-height: 1.35; color: rgba(255, 255, 255, .92); margin: 0; padding: 4px 10px; border-radius: 999px;
+  background: rgba(0, 0, 0, .28); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+}
 .photo-credit a { color: inherit; }
 #login .wordmark { font-size: 46px; }
+/* Alles in einer Glaskarte: das Foto bleibt rundherum scharf, die Felder sitzen ruhig auf dem Glas */
+#login:is([data-uni="jku"], [data-uni="abpu"], [data-uni="plus"]) .login-box {
+  background: var(--login-glass); border-radius: 30px; padding: 30px 20px 14px;
+  -webkit-backdrop-filter: saturate(180%) blur(28px); backdrop-filter: saturate(180%) blur(28px);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .18), inset 0 0 0 .5px rgba(255, 255, 255, .45);
+  animation: login-card-in .5s cubic-bezier(.2, .8, .2, 1) both;
+}
+@keyframes login-card-in { from { opacity: 0; transform: translateY(14px) scale(.98); } }
+#login .login-head { margin-bottom: 26px; }
 #login .group {
-  background: color-mix(in srgb, var(--card) 70%, transparent);
-  -webkit-backdrop-filter: saturate(170%) blur(24px); backdrop-filter: saturate(170%) blur(24px);
-  box-shadow: 0 8px 30px rgba(0, 0, 0, .06), 0 0 0 .5px color-mix(in srgb, var(--text) 8%, transparent);
+  background: var(--login-cell);
+  box-shadow: 0 0 0 .5px color-mix(in srgb, var(--text) 8%, transparent);
 }
 #login .field, #login .row { background-color: transparent; }
+/* Autofill färbt Felder sonst hellblau, das passt nicht ins Glas */
+#login .field:-webkit-autofill { -webkit-box-shadow: 0 0 0 100px transparent inset; -webkit-text-fill-color: var(--text); transition: background-color 9999s; }
+#login #to-admin { margin-top: 4px; }
 #login .btn-primary { box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 35%, transparent); }
 #uni-pick { width: 100%; text-align: left; }
 #uni-pick > span:first-child { flex: none; }
@@ -597,9 +615,9 @@ html[data-hero="plus"] { --hero-photo: url("/login-bg-plus.jpg"); }
   animation: hero-in .6s ease both;
 }
 .hero::before {
-  content: ""; position: absolute; inset: -40px;
+  content: ""; position: absolute; inset: -16px;
   background: linear-gradient(var(--hero-tint), var(--hero-tint)), var(--hero-photo) center 40% / cover no-repeat;
-  filter: blur(18px) saturate(1.3);
+  filter: blur(6px) saturate(1.2);
 }
 /* Oberste Kante einfarbig, genau wie die Statusleiste: kein sichtbarer Rand um die Dynamic Island */
 .hero::after {

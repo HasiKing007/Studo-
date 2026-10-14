@@ -82,7 +82,7 @@ const darkQuery = matchMedia("(prefers-color-scheme: dark)");
 // Hochschulfoto oben auf Home (bis hinter die Dynamic Island). Die Statusleiste bekommt die Farbe der
 // obersten Fotokante, damit kein Rand entsteht; beim Scrollen oder in anderen Tabs wieder die normale Farbe.
 const HERO_TOP = {
-  jku: { light: "#AAAEA5", dark: "#383C31" }, abpu: { light: "#B6C0D0", dark: "#424C58" }, plus: { light: "#88A6CC", dark: "#183454" },
+  jku: { light: "#A7ABA2", dark: "#34382E" }, abpu: { light: "#B5BFCF", dark: "#424A58" }, plus: { light: "#88A6CD", dark: "#183456" },
 };
 const isDark = (theme = getTheme()) => theme === "dark" || (theme === "auto" && darkQuery.matches);
 function heroUni() {
