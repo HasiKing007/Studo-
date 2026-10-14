@@ -448,3 +448,16 @@ button, a, label, input, select { touch-action: manipulation; }
 /* Keine Scrollleisten-Anzeige in Unterseiten und im Kalender */
 .page, .cal-view { scrollbar-width: none; }
 .page::-webkit-scrollbar, .cal-view::-webkit-scrollbar { display: none; }
+/* Hinweis auf neue Version: schwebt oben ein, bleibt bis zum Neustart */
+.update-toast {
+  position: fixed; z-index: 60; left: 12px; right: 12px; top: calc(env(safe-area-inset-top) + 8px); max-width: 520px; margin: 0 auto;
+  display: flex; align-items: center; gap: 12px; padding: 10px 10px 10px 16px; border-radius: 18px;
+  background: color-mix(in srgb, var(--card) 82%, transparent); border: .5px solid var(--card-border);
+  -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, .18); font-size: 13px; color: var(--muted);
+  transform: translate3d(0, -140%, 0); transition: transform .5s var(--spring);
+}
+.update-toast.in { transform: none; }
+.update-toast span { flex: 1; min-width: 0; }
+.update-toast strong { display: block; color: var(--text); font-size: 15px; font-weight: 600; }
+.update-toast button { flex: none; background: var(--accent); color: #fff; font-weight: 600; font-size: 14px; padding: 8px 14px; border-radius: 999px; }

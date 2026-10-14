@@ -20,7 +20,31 @@ const fmtDate = new Intl.DateTimeFormat("de-AT", { day: "numeric", month: "numer
 const fmtNum = new Intl.NumberFormat("de-AT", { maximumFractionDigits: 2 });
 const fmtAvg = new Intl.NumberFormat("de-AT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");
+// Service Worker: lädt neue Versionen im Hintergrund. Sobald eine neue Version übernommen wurde,
+// läuft auf dem Bildschirm noch die alte -> Hinweis mit Knopf zum Neustarten.
+if ("serviceWorker" in navigator) {
+  let hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register("/sw.js").then((reg) => {
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) reg.update().catch(() => {}); });
+  }).catch(() => {});
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    // Erste Installation übernimmt die Seite nur – erst ein späterer Wechsel ist eine neue Version
+    if (hadController) showUpdateToast(); else hadController = true;
+  });
+}
+function showUpdateToast() {
+  if (document.querySelector(".update-toast")) return;
+  const t = document.createElement("div");
+  t.className = "update-toast"; t.setAttribute("role", "status");
+  const txt = document.createElement("span");
+  txt.innerHTML = "<strong>Neue Version verfügbar</strong>Bitte neu starten, um sie zu nutzen.";
+  const b = document.createElement("button");
+  b.textContent = "Neu starten";
+  b.addEventListener("click", () => location.reload());
+  t.append(txt, b);
+  document.body.append(t);
+  requestAnimationFrame(() => requestAnimationFrame(() => t.classList.add("in")));
+}
 
 // ---------- Erscheinungsbild (Standard: hell) ----------
 function getTheme() { try { return localStorage.getItem("studo_theme") || "light"; } catch { return "light"; } }

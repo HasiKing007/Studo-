@@ -94,7 +94,7 @@ export const UNIS = {
     ],
   },
   plus: {
-    name: "Universität Salzburg",
+    name: "Universität Salzburg (PLUS)",
     auth: "local",
     userLabel: "Benutzername",
     userPlaceholder: "Benutzername",
@@ -102,6 +102,18 @@ export const UNIS = {
     links: [
       { id: "online", name: "PLUSonline", url: "https://online.uni-salzburg.at/", icon: "grid" },
       { id: "web", name: "PLUS", url: "https://www.plus.ac.at/", icon: "book" },
+      { id: "mail", name: "Mail", url: "https://outlook.office.com/mail/", icon: "mail" },
+    ],
+  },
+  abpu: {
+    name: "Anton Bruckner Privatuniversität",
+    auth: "local",
+    userLabel: "Matrikelnummer",
+    userPlaceholder: "Matrikelnummer",
+    icalHint: "bruckner online → Mein Kalender → Exportieren / Abonnieren, Link kopieren.",
+    links: [
+      { id: "online", name: "Online-Services", url: "https://www.bruckneruni.at/de/services/online-services", icon: "grid" },
+      { id: "web", name: "Bruckneruni", url: "https://www.bruckneruni.at/", icon: "book" },
       { id: "mail", name: "Mail", url: "https://outlook.office.com/mail/", icon: "mail" },
     ],
   },
