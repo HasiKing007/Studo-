@@ -454,8 +454,7 @@ html, body { overscroll-behavior-x: none; }
 .splash.is-leaving .splash-inner { animation: splash-zoom .6s cubic-bezier(.4, 0, .2, 1) forwards; }
 html.splash-done .splash { display: none; }
 html.splashing { overflow: hidden; }
-html.splashing #app { transform: scale(.97); }
-#app { transition: transform .6s cubic-bezier(.2, .8, .2, 1); }
+/* Kein transform auf #app: das verschiebt fixierte Leisten (oben zuerst, Tab-Leiste springt nach) */
 @keyframes splash-word { from { opacity: 0; transform: translateY(8px) scale(.96); filter: blur(10px); letter-spacing: .02em; } }
 @keyframes splash-plus { from { opacity: 0; transform: scale(.2) rotate(-90deg); } }
 @keyframes splash-glow { to { opacity: 1; } }
