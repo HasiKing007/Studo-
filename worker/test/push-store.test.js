@@ -92,3 +92,25 @@ test("Erinnerung 48 h vor Ende der Prüfungsanmeldung, nur wenn nicht angemeldet
   await s.remind(now);
   assert.deepEqual(s.sent.map((m) => [m.title, m.body]), [["Anmeldung endet morgen 23:59", "Analysis 1 · Prüfung Fr., 30.10. 08:30"]]);
 });
+
+test("Unveränderter Kalender schreibt beim nächsten Abgleich fast nichts in die Datenbank", async () => {
+  const s = store();
+  s.track = () => {};
+  s.setSetting("ical_url", "https://example.org/cal.ics");
+  const ics = ["BEGIN:VCALENDAR", "VERSION:2.0", ...[1, 2, 3].flatMap((i) => [
+    "BEGIN:VEVENT", `UID:e${i}@test`, `DTSTART:2030010${i}T080000Z`, `DTEND:2030010${i}T093000Z`,
+    `SUMMARY:Kurs ${i}`, "LOCATION:HS 1", "END:VEVENT"]), "END:VCALENDAR"].join("\r\n");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(ics);
+  try {
+    const first = await s.sync();
+    assert.equal(first.new, 3);
+    const writes = [];
+    const exec = s.sql.exec.bind(s.sql);
+    s.sql.exec = (q, ...a) => { if (/^\s*(INSERT|UPDATE|DELETE)/i.test(q)) writes.push(q); return exec(q, ...a); };
+    const second = await s.sync();
+    assert.equal(second.unchanged, true);
+    assert.ok(writes.length <= 1, `nur last_sync darf geschrieben werden, waren: ${writes.length}`);
+    s.sql.exec = exec;
+  } finally { globalThis.fetch = realFetch; }
+});
