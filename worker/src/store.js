@@ -18,6 +18,8 @@ import { error, hashPassword, json, parseSession, randomToken, sha256, timingSaf
 
 // Tagsüber (6–22 Uhr Wien) alle 10 Minuten, nachts stündlich: Raumänderungen kommen so rasch an
 const SYNC_DAY_MINUTES = 10, SYNC_NIGHT_MINUTES = 60;
+// Erhöhen, wenn sich die Verarbeitung der Termine ändert: dann wird jeder Kalender einmal neu übernommen
+const FEED_DIGEST_VERSION = 1;
 // Stunde in Wien als Zahl ("de-AT" formatiert "12 Uhr", daher über formatToParts)
 const hourFmt = new Intl.DateTimeFormat("en-GB", { hour: "numeric", hourCycle: "h23", timeZone: "Europe/Vienna" });
 const viennaHour = (d = new Date()) => +hourFmt.formatToParts(d).find((p) => p.type === "hour").value;
@@ -138,7 +140,10 @@ export class StudoStore extends DurableObject {
   }
 
   setSetting(key, value) {
-    if (value === null || value === undefined) this.sql.exec("DELETE FROM settings WHERE key=?", key);
+    // Unveränderte Werte nicht neu schreiben: jede geschriebene Zeile zählt gegen das Gratis-Kontingent von Cloudflare
+    const old = this.getSetting(key);
+    if (value === null || value === undefined) { if (old !== null) this.sql.exec("DELETE FROM settings WHERE key=?", key); }
+    else if (old === String(value)) return;
     else this.sql.exec("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, String(value));
   }
 
@@ -192,6 +197,14 @@ export class StudoStore extends DurableObject {
         throw e;
       }
     }
+    // Unveränderter Kalender: nichts in die Datenbank schreiben. Früher wurde alle 10 Minuten jede Zeile
+    // neu geschrieben; das hat das Tageslimit von Cloudflare gesprengt und die App zeitweise lahmgelegt.
+    const digest = await sha256(`${FEED_DIGEST_VERSION}|${JSON.stringify(events)}`);
+    if (digest === this.getSetting("ical_digest")) {
+      this.setSetting("last_sync", new Date().toISOString());
+      this.setSetting("last_sync_error", null);
+      return { new: 0, changed: 0, cancelled: 0, total: events.length, notes: [], unchanged: true };
+    }
     let stats;
     try { stats = await this.apply(events); } catch (e) {
       console.warn("Abgleich fehlgeschlagen:", e.stack || e.message);
@@ -199,6 +212,7 @@ export class StudoStore extends DurableObject {
       this.track("sync_error");
       throw e;
     }
+    this.setSetting("ical_digest", digest);
     this.track("sync", { events: stats.total });
     if (stats.notes.length) await this.notifyChanges(stats.notes).catch((e) => console.warn("Push:", e.message));
     return stats;
@@ -226,6 +240,12 @@ export class StudoStore extends DurableObject {
       }
     }
     const now = new Date(), stamp = now.toISOString();
+    const digest = await sha256(`${FEED_DIGEST_VERSION}|${JSON.stringify(items)}`);
+    if (digest === this.getSetting("moodle_digest")) {
+      this.setSetting("moodle_error", null);
+      this.setSetting("moodle_sync", stamp);
+      return { total: items.length, unchanged: true };
+    }
     const seen = new Set();
     for (const d of items) {
       seen.add(d.uid);
@@ -242,6 +262,7 @@ export class StudoStore extends DurableObject {
     this.sql.exec("DELETE FROM deadlines WHERE due < ?", new Date(now - 30 * 86400_000).toISOString());
     this.setSetting("moodle_error", null);
     this.setSetting("moodle_sync", stamp);
+    this.setSetting("moodle_digest", digest);
     return { total: items.length };
   }
 
@@ -362,9 +383,7 @@ export class StudoStore extends DurableObject {
         this.sql.exec(`UPDATE events SET course_id=?,title=?,kind=?,start=?,"end"=?,room_raw=?,building=?,room=?,
           description=?,status=?,fingerprint=?,last_seen=?,updated_at=?,sequence=sequence+1 WHERE uid=?`, ...v, e.uid);
         stats.changed++;
-      } else {
-        this.sql.exec("UPDATE events SET last_seen=? WHERE uid=?", stamp, e.uid);
-      }
+      } // unverändert: nicht schreiben
     }
 
     // Zukünftige Termine, die nicht mehr geliefert werden -> als entfallen markieren
@@ -401,11 +420,13 @@ export class StudoStore extends DurableObject {
       byCourse.set(e.courseId, c);
     }
     for (const [id, c] of byCourse) {
-      const old = this.sql.exec("SELECT kinds, semesters, first_start, last_end FROM courses WHERE course_id=?", id).toArray()[0];
+      const old = this.sql.exec("SELECT title, nr, kinds, semesters, first_start, last_end, lecturer FROM courses WHERE course_id=?", id).toArray()[0];
       const kinds = new Set([...(old?.kinds ? old.kinds.split(",") : []), ...c.kinds]);
       const sems = new Set([...(old?.semesters ? old.semesters.split(",") : []), ...c.sems]);
       const first = old && old.first_start < c.first.toISOString() ? old.first_start : c.first.toISOString();
       const last = old && old.last_end > c.last.toISOString() ? old.last_end : c.last.toISOString();
+      if (old && old.title === c.title && old.nr === c.nr && old.kinds === [...kinds].join(",") && old.first_start === first
+        && old.last_end === last && old.semesters === [...sems].join(",") && old.lecturer === c.lecturer) continue;
       this.sql.exec(`INSERT INTO courses(course_id, title, nr, kinds, first_start, last_end, semesters, lecturer) VALUES(?,?,?,?,?,?,?,?)
         ON CONFLICT(course_id) DO UPDATE SET title=excluded.title, nr=excluded.nr, kinds=excluded.kinds,
         first_start=excluded.first_start, last_end=excluded.last_end, semesters=excluded.semesters, lecturer=excluded.lecturer`,
@@ -448,6 +469,7 @@ export class StudoStore extends DurableObject {
     if (r.name) this.setSetting("kusss_name", r.name);
     if (r.icalUrl && (this.getSetting("ical_source") !== "manual" || !this.getSetting("ical_url"))) {
       this.setSetting("ical_url", r.icalUrl);
+      this.setSetting("ical_digest", null);
       this.setSetting("ical_source", "auto");
     }
     this.storeGrades(r.grades);
@@ -713,6 +735,7 @@ export class StudoStore extends DurableObject {
         const link = body.ical_url.trim();
         if (link && !/^(https|webcal):\/\//i.test(link)) return error(422, "Bitte den vollständigen https:// oder webcal:// Link einfügen.");
         this.setSetting("ical_url", link || null);
+        this.setSetting("ical_digest", null);
         this.setSetting("ical_source", link ? "manual" : null);
         this.setSetting("login_notice", null);
         if (link) {
@@ -725,6 +748,7 @@ export class StudoStore extends DurableObject {
           return error(422, "Das ist kein Moodle-Kalenderlink. Er enthält „calendar/export_execute.php“ und „authtoken“.");
         }
         this.setSetting("moodle_url", link || null);
+        this.setSetting("moodle_digest", null);
         this.setSetting("moodle_error", null);
         if (!link) this.sql.exec("DELETE FROM deadlines");
         else {
