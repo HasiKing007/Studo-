@@ -627,6 +627,14 @@ async function renderAdmin(data) {
       el("div", "user-meta", `${u.logins} Logins · ${u.opens}× geöffnet · ${u.feed_hits} Kalender-Abrufe · ${u.events} Termine`));
     return r;
   }) : [el("div", "row muted", "Noch keine Konten.")]));
+  $("#admin-feedback").replaceChildren(...(data.feedback?.length ? data.feedback.map((f) => {
+    const r = el("div", "row user-row");
+    const head = el("div", "user-head");
+    head.append(el("strong", "", f.name || f.username), el("span", "muted", ago(f.created_at)));
+    const text = el("div", "feedback-text", f.text);
+    r.append(head, el("div", "user-meta", `${f.name ? `${f.username} · ` : ""}${names[f.uni] || f.uni || ""}`), text);
+    return r;
+  }) : [el("div", "row muted", "Noch kein Feedback.")]));
 }
 
 // ---------- Tabs ----------
@@ -639,6 +647,8 @@ $("#avatar").addEventListener("click", openProfile);
 $("#btn-profile").addEventListener("click", openProfile);
 $("#btn-connection").addEventListener("click", openConnection);
 $("#btn-abo").addEventListener("click", openAbo);
+$("#btn-share").addEventListener("click", shareApp);
+$("#btn-feedback").addEventListener("click", openFeedback);
 $("#btn-moodle").addEventListener("click", openMoodle);
 $("#btn-push").addEventListener("click", openPush);
 
@@ -1900,14 +1910,57 @@ function openPush() {
 }
 
 // Apple Kalender: Abo, Markierung der Anwesenheitspflicht, Link
-function openAbo() {
-  pushPage("Apple Kalender", (body) => {
+// Weiterempfehlen: Teilen-Blatt des Geräts, sonst Link kopieren
+async function shareApp() {
+  const url = location.origin + "/";
+  const text = "Stundenplan, Kurse, Noten und Abgaben in einer App. Schau dir Studo+ an:";
+  haptic();
+  if (navigator.share) { try { await navigator.share({ title: "Studo+", text, url }); } catch { /* abgebrochen */ } return; }
+  const label = $("#btn-share span");
+  try { await navigator.clipboard.writeText(`${text} ${url}`); label.textContent = "Link kopiert ✓"; setTimeout(() => (label.textContent = "Studo+ weiterempfehlen"), 1500); }
+  catch { prompt("Link zum Weitergeben:", url); }
+}
+
+function openFeedback() {
+  pushPage("Feedback", (body) => {
     body.append(el("div", "page-head"));
-    $(".page-head", body).append(el("h1", "", "Apple Kalender"), el("p", "", "Dein Stundenplan als Kalender-Abo, aktualisiert sich von selbst."));
-    const sub = el("a", "btn-primary", "In Apple Kalender abonnieren");
-    sub.href = state.me.feed.webcal;
-    sub.style.textDecoration = "none"; sub.style.marginTop = "0";
-    body.append(sub);
+    $(".page-head", body).append(el("h1", "", "Feedback"), el("p", "", "Was fehlt, was stört, was gefällt dir? Deine Nachricht geht direkt an den Entwickler."));
+    const box = el("div", "group");
+    const ta = el("textarea", "field feedback-field"); ta.rows = 6; ta.maxLength = 2000; ta.placeholder = "Deine Nachricht";
+    box.append(ta);
+    const send = el("button", "btn-primary", "Senden");
+    const msg = el("p", "footnote");
+    send.addEventListener("click", async () => {
+      if (!ta.value.trim()) { ta.focus(); return; }
+      send.disabled = true;
+      try { await post("/api/feedback", { text: ta.value }); ta.value = ""; msg.textContent = "Danke! Dein Feedback ist angekommen."; haptic(); }
+      catch (e) { msg.textContent = e.message; }
+      finally { send.disabled = false; }
+    });
+    body.append(box, send, msg, note("Mit der Nachricht werden dein Name und deine Kennung übermittelt, damit eine Antwort möglich ist."));
+  });
+}
+
+function openAbo() {
+  const android = /Android/i.test(navigator.userAgent);
+  pushPage("Kalender-Abo", (body) => {
+    body.append(el("div", "page-head"));
+    $(".page-head", body).append(el("h1", "", "Kalender-Abo"), el("p", "", "Dein Stundenplan in der Kalender-App deines Handys, aktualisiert sich von selbst."));
+    const apple = el("a", "btn-primary", "In Apple Kalender abonnieren");
+    const google = el("a", "btn-primary", "In Google Kalender hinzufügen");
+    const setLinks = () => {
+      apple.href = state.me.feed.webcal;
+      google.href = `https://calendar.google.com/calendar/render?cid=${encodeURIComponent(state.me.feed.webcal)}`;
+    };
+    setLinks();
+    google.target = "_blank"; google.rel = "noopener";
+    for (const a of [apple, google]) { a.style.textDecoration = "none"; a.style.marginTop = "0"; }
+    const [first, second] = android ? [google, apple] : [apple, google];
+    second.classList.add("btn-secondary");
+    body.append(first, second, note(android
+      ? "Google Kalender holt Änderungen nur alle paar Stunden. Raumänderungen siehst du am schnellsten hier in Studo+."
+      : "Auf Android-Handys geht es über Google Kalender. Google holt Änderungen nur alle paar Stunden."));
+    const sub = apple;
 
     const marker = el("div", "group");
     for (const [v, label] of [["prefix", "„!“ vor dem Kursnamen"], ["emoji", "🔴 vor dem Kursnamen"], ["notes", "Nur in den Notizen"]]) {
@@ -1927,9 +1980,15 @@ function openAbo() {
     const rotate = el("button", "row row-btn", "Abo-Link erneuern");
     rotate.addEventListener("click", async () => {
       if (!confirm("Neuen Abo-Link erzeugen? Bestehende Kalender-Abos hören auf zu aktualisieren.")) return;
-      state.me.feed = await post("/api/feed/rotate"); sub.href = state.me.feed.webcal;
+      state.me.feed = await post("/api/feed/rotate"); setLinks();
     });
     body.append(header("Abo-Link"), group(copy, rotate), note("Erneuern macht den alten Link ungültig. Danach neu abonnieren."));
+    // Eigene Widgets kann eine Web-App nicht anlegen, das Kalender-Widget zeigt aber den nächsten Kurs aus dem Abo
+    body.append(header("Nächster Kurs am Home-Bildschirm"), group(
+      el("div", "row widget-step", android
+        ? "Lange auf eine freie Stelle am Home-Bildschirm drücken › Widgets › Google Kalender."
+        : "Lange auf den Home-Bildschirm drücken › Bearbeiten › Widget hinzufügen › Kalender › „Als Nächstes“."),
+    ), note("Das Widget zeigt Termine aus dem Abo oben, also auch den laufenden oder nächsten Kurs."));
   });
 }
 
