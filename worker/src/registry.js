@@ -16,7 +16,9 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS daily (day TEXT NOT NULL, metric TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, metric));
 CREATE TABLE IF NOT EXISTS failures (ip TEXT NOT NULL, ts INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_fail_ip ON failures(ip, ts);
+CREATE TABLE IF NOT EXISTS feedback (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL, name TEXT, uni TEXT, text TEXT NOT NULL, created_at TEXT NOT NULL);
 `;
+const FEEDBACK_PER_DAY = 5;
 
 // Welche Spalten ein Ereignis hochzählt
 const EVENTS = {
@@ -80,6 +82,15 @@ export class Registry extends DurableObject {
     }
   }
 
+  /** Feedback aus der App: höchstens ein paar Nachrichten pro Konto und Tag, sichtbar nur im Adminbereich. */
+  feedback(key, info, text) {
+    const since = new Date(Date.now() - 86400_000).toISOString();
+    if (this.sql.exec("SELECT COUNT(*) AS n FROM feedback WHERE key=? AND created_at>=?", key, since).one().n >= FEEDBACK_PER_DAY) return false;
+    this.sql.exec("INSERT INTO feedback(key, name, uni, text, created_at) VALUES(?,?,?,?,?)",
+      key, info.name || null, info.uni || null, text, new Date().toISOString());
+    return true;
+  }
+
   overview() {
     const now = Date.now();
     const iso = (ms) => new Date(ms).toISOString();
@@ -108,6 +119,8 @@ export class Registry extends DurableObject {
       },
       by_uni: byUni,
       days,
+      feedback: this.sql.exec("SELECT name, uni, key, text, created_at FROM feedback ORDER BY id DESC LIMIT 50").toArray()
+        .map((f) => ({ name: f.name, uni: f.uni, username: f.key.split(":")[1], text: f.text, created_at: f.created_at })),
       users: users.map((u) => ({
         uni: u.uni, username: u.username, name: u.name || null, created_at: u.created_at, verified: !!u.verified, connected: !!u.connected,
         events: u.events, logins: u.logins, last_login: u.last_login, opens: u.opens, last_open: u.last_open,

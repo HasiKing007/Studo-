@@ -724,6 +724,16 @@ export class StudoStore extends DurableObject {
       return json(this.me(url.origin));
     }
 
+    if (path === "/api/feedback" && method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const text = String(body.text || "").trim();
+      if (!text) return error(422, "Bitte schreib eine Nachricht.");
+      if (text.length > 2000) return error(422, "Bitte höchstens 2000 Zeichen.");
+      const stub = this.env.REGISTRY.get(this.env.REGISTRY.idFromName("global"));
+      const ok = await stub.feedback(this.key, { name: this.getSetting("display_name") || this.getSetting("kusss_name"), uni: this.getSetting("uni") }, text);
+      return ok ? json({ ok: true }) : error(429, "Danke! Für heute sind genug Nachrichten angekommen, morgen geht es wieder.");
+    }
+
     if (path === "/api/settings" && method === "PUT") {
       const body = await request.json().catch(() => ({}));
       if (body.marker_style !== undefined && body.marker_style !== null) {
